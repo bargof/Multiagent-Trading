@@ -19,13 +19,13 @@ Proyecto final del Módulo 4 · Diplomado en AI & LLMs para Mercados Financieros
 | 2 | Herramientas deterministas y traza | Hecho |
 | 3 | Cinco agentes y grafo de control | Hecho con modelos de guion; falta la prueba con modelos reales |
 | 4 | Evaluador, juez y congelación | Hecho y probado con trazas sintéticas; la congelación espera los modelos |
-| 5 | Campaña: R1–R5 ×3, R6 ×3 aparte | Pendiente |
+| 5 | Campaña: R1–R5 ×3, R6 ×3 aparte | Ejecutor hecho y probado sin red; falta correrla |
 | 6 | PDF de resultados, diagrama y ZIP | Pendiente |
 
 Ninguna ruta se ha ejecutado todavía con modelos reales. No hay resultados
 observados: las 23 trazas de `--probar-evaluador` son pruebas del evaluador,
-no ejecuciones del sistema. La integración con Gemini está probada con un
-cliente falso, sin red ni cuota.
+no ejecuciones del sistema. La integración con Gemini y el ejecutor de la
+campaña están probados con un cliente falso, sin red ni cuota.
 
 ---
 
@@ -102,6 +102,38 @@ Primero corre las mismas pruebas sintéticas. Si todas salen como se espera,
 escribe `reports/congelacion.json` con las huellas de datos, expectativas,
 juez, agentes, límites y configuración, más el SHA-256 del archivo.
 
+---
+
+## La campaña
+
+```powershell
+.venv\Scripts\python proyecto_multiagente.py
+```
+
+Sin opciones corre la campaña: R1–R5 tres veces, por rondas, y R6 tres veces
+aparte. Al terminar imprime la tabla de las rutas. Si los agentes siguieran
+las rutas de referencia serían 123 llamadas a los agentes y 6 al juez; con
+modelos reales serán más. A 8 llamadas por minuto, al menos 16 minutos.
+
+Si la cuota se acaba a mitad de campaña, la campaña se detiene. La ejecución
+cortada se conserva, no cuenta y se repite. Al volver a correr el mismo
+comando con el mismo código, sigue donde quedó sin repetir ninguna ejecución
+terminada. Si el código cambió, empieza otra campaña y la anterior se
+conserva (decisión D52).
+
+```powershell
+.venv\Scripts\python proyecto_multiagente.py --ejecuciones 5   # a lo más 5 hoy
+.venv\Scripts\python proyecto_multiagente.py --tabla           # sin llamar a los modelos
+.venv\Scripts\python proyecto_multiagente.py --nueva-campana   # otra, a propósito
+```
+
+Cada campaña queda en `reports/campanas/<fecha>-<hora>/`:
+- `campana.json`: huellas, modelos, versiones, rutas y plan;
+- `ejecuciones.jsonl`: un registro por ejecución;
+- `trazas.jsonl`: los eventos de cada ejecución;
+- `resultados.json`: las tablas, recalculadas de los registros;
+- `revision.md`: la plantilla de la revisión humana.
+
 Pruebas deterministas, sin modelo ni red:
 
 ```powershell
@@ -116,14 +148,18 @@ Pruebas deterministas, sin modelo ni red:
 ```
 proyecto_multiagente.py   entregable 1: sistema y evaluación en un solo archivo
 tests/unit/               pruebas deterministas: contratos, datos, clave,
-                          herramientas, Mesa, grafo, evaluador y Gemini
-tests/conftest.py         ninguna prueba sale a la red ni usa la key
+                          herramientas, Mesa, grafo, evaluador, Gemini y
+                          campaña
+tests/conftest.py         ninguna prueba sale a la red, usa la key ni escribe
+                          en reports/
 tests/guion.py            reexporta el modelo de guion del ejecutable, para
                           probar el grafo sin red
+tests/gemini_falso.py     cliente falso de Gemini: la conversión real de
+                          langchain-google-genai, sin red
 docs/decisiones.md        sección 10 para el documento de trabajo: decisiones
                           que completan la especificación v0.3
 docs/pruebas.md           registro de lo verificado en cada bloque
-reports/                  resultados de campaña, JSON y JSONL (Bloque 5)
+reports/                  congelación y campañas, JSON y JSONL (Bloque 5)
 scripts/                  PDF, diagrama y ZIP de entrega (Bloque 6)
 ```
 

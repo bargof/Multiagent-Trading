@@ -8,10 +8,15 @@ fechados y rutas de evaluación definidas antes de ejecutar el sistema.
 
 Uso:
 
+    python proyecto_multiagente.py                      # la campaña y su tabla
     python proyecto_multiagente.py --verificar          # versiones y modelos
     python proyecto_multiagente.py --consulta "texto"   # un caso de desarrollo
     python proyecto_multiagente.py --probar-evaluador   # trazas con defectos
     python proyecto_multiagente.py --congelar           # registra las huellas
+    python proyecto_multiagente.py --tabla              # la última campaña
+
+Sin opciones corre la campaña: R1–R5 tres veces y R6 tres veces aparte. Si
+la cuota la corta, volver a correrlo con el mismo código la sigue donde quedó.
 
 Configuración obligatoria: una variable de entorno, GOOGLE_API_KEY, con una
 key de Google AI Studio, o un archivo .env junto a este script (ver
@@ -28,7 +33,8 @@ Secciones, en el orden del plan de implementación:
     5. Herramientas y traza ............... Bloque 2
     6. Agentes y grafo .................... Bloque 3
     7. Evaluador y juez ................... Bloque 4
-    8. Verificación del entorno y main .... Bloque 1
+    8. Verificación del entorno ........... Bloque 1
+    9. Campaña y main ..................... Bloque 5
 """
 
 import argparse
@@ -36,6 +42,7 @@ import hashlib
 import importlib.metadata
 import json
 import logging
+import math
 import os
 import platform
 import re
@@ -43,6 +50,7 @@ import sys
 import textwrap
 import threading
 import time
+import traceback
 import uuid
 from collections import Counter
 from collections.abc import Callable, Iterable, Mapping
@@ -2206,6 +2214,33 @@ class Traza:
 # --- Presupuesto ---
 
 
+class _EsperaProveedor:
+    """Segundos que el sistema pasó esperando al proveedor, sin trabajar.
+
+    Cuentan el turno que impone el ritmo de la cuota y la pausa antes del
+    reintento. El límite de tiempo por caso los descuenta: si no, un ritmo
+    más lento cerraría casos por tiempo, y el ritmo dejaría de ser indiferente
+    para el experimento (decisión D53).
+    """
+
+    def __init__(self):
+        self.segundos = 0.0
+        self._candado = threading.Lock()
+
+    def sumar(self, segundos: float) -> None:
+        with self._candado:
+            self.segundos += segundos
+
+
+ESPERA_PROVEEDOR = _EsperaProveedor()
+
+
+def reloj_de_trabajo() -> float:
+    """time.monotonic sin la espera al proveedor. Basta una cuenta global
+    porque los casos corren de uno en uno, y sus llamadas al modelo también."""
+    return time.monotonic() - ESPERA_PROVEEDOR.segundos
+
+
 class Presupuesto:
     """Contadores de la sección 3.2 para un caso.
 
@@ -2215,7 +2250,7 @@ class Presupuesto:
     """
 
     def __init__(
-        self, limites: Limites = LIMITES, reloj: Callable[[], float] = time.monotonic
+        self, limites: Limites = LIMITES, reloj: Callable[[], float] = reloj_de_trabajo
     ):
         self.limites = limites
         self._reloj = reloj
@@ -2385,6 +2420,18 @@ _TRANSITORIOS = (
 # ningún control: la Mesa valida los argumentos con el esquema completo.
 logging.getLogger("langchain_google_genai._function_utils").setLevel(logging.ERROR)
 
+
+class _Ritmo(InMemoryRateLimiter):
+    """El ritmo de la cuota, que anota cuánto esperó cada llamada su turno."""
+
+    def acquire(self, *, blocking: bool = True) -> bool:
+        inicio = time.monotonic()
+        try:
+            return super().acquire(blocking=blocking)
+        finally:
+            ESPERA_PROVEEDOR.sumar(time.monotonic() - inicio)
+
+
 # La cuota gratuita es por modelo y proyecto, no por agente: todas las
 # instancias de un modelo comparten su ritmo.
 _RITMOS: dict[tuple[str, int], InMemoryRateLimiter] = {}
@@ -2392,10 +2439,14 @@ _RITMOS: dict[tuple[str, int], InMemoryRateLimiter] = {}
 
 def crear_modelo(nombre: str, config: Configuracion) -> BaseChatModel:
     """Sin reintentos internos: el único reintento lo hace el middleware y
-    queda en la traza (sección 3.2)."""
+    queda en la traza (sección 3.2).
+
+    Sin caché: LangChain usaría la global si alguien la configurara, y una
+    repetición devolvería la respuesta de otra (decisión D51).
+    """
     ritmo = _RITMOS.setdefault(
         (nombre, config.llamadas_por_minuto),
-        InMemoryRateLimiter(
+        _Ritmo(
             requests_per_second=config.llamadas_por_minuto / 60,
             check_every_n_seconds=0.1,
         ),
@@ -2406,6 +2457,7 @@ def crear_modelo(nombre: str, config: Configuracion) -> BaseChatModel:
         "timeout": LIMITES.timeout_llamada_s,
         "max_retries": 0,
         "rate_limiter": ritmo,
+        "cache": False,
     }
     if config.temperatura is not None:
         opciones["temperature"] = config.temperatura
@@ -2424,7 +2476,9 @@ def nombre_modelo(modelo: BaseChatModel) -> str:
 def pausar_antes_de_reintentar() -> None:
     """Un 503 o un 429 de la capa gratuita suele pasar en segundos; reintentar
     al instante casi siempre vuelve a fallar. Las pruebas la sustituyen."""
+    inicio = time.monotonic()
     time.sleep(LIMITES.pausa_reintento_s)
+    ESPERA_PROVEEDOR.sumar(time.monotonic() - inicio)
 
 
 class CasoCerrado(Exception):  # noqa: N818 — no es un error del programa
@@ -2942,7 +2996,14 @@ class _Supervision(AgentMiddleware):
                     ClaseEvento.CONTROL,
                     self.agente,
                     "reintento_transporte",
-                    {"status": "error", "intento": intento + 1, "error": repr(error)},
+                    {
+                        "status": "error",
+                        "intento": intento + 1,
+                        "error": repr(error),
+                        # Un 429: la campaña distingue la cuota agotada de un
+                        # modelo que no responde (decisión D52).
+                        "cuota_agotada": isinstance(error, ModelRateLimitError),
+                    },
                     invocacion=self.invocacion,
                 )
                 if intento == LIMITES.reintentos_transporte:
@@ -3084,6 +3145,7 @@ class Caso:
         for clave in ("input_tokens", "output_tokens"):
             self.tokens[clave] += uso.get(clave, 0)
         pedidas = [{"name": c["name"], "args": c["args"]} for c in mensaje.tool_calls]
+        metadatos = mensaje.response_metadata or {}
         self.traza.registrar(
             ClaseEvento.MODELO,
             agente,
@@ -3096,6 +3158,11 @@ class Caso:
                 # texto.
                 "texto": mensaje.text[:500],
                 "uso": dict(uso),
+                # La versión que respondió y por qué terminó el turno: una
+                # campaña que dura varios días puede cruzar una actualización
+                # del modelo, y un MALFORMED_FUNCTION_CALL explica una falla.
+                "modelo_respuesta": metadatos.get("model_name"),
+                "fin": metadatos.get("finish_reason"),
             },
             invocacion=invocacion,
         )
@@ -3660,7 +3727,13 @@ def ejecutar_caso(
         datos=datos,
     )
     inicio = time.monotonic()
-    final = construir_grafo(caso).invoke({}, config={"recursion_limit": 40})
+    try:
+        final = construir_grafo(caso).invoke({}, config={"recursion_limit": 40})
+    except BaseException as error:
+        # La campaña conserva lo que el caso alcanzó a registrar: la traza
+        # parcial es parte de la evidencia de la falla.
+        error.caso_parcial = caso
+        raise
     return ResultadoCaso(
         run_id=caso.traza.run_id,
         solicitud=solicitud,
@@ -3884,6 +3957,8 @@ class Juicio(_Registro):
     veredicto: VeredictoJuez | None = None
     error: str | None = None
     reintentos: int = 0
+    # El juicio no se completó por un 429: la campaña se detiene (D52).
+    cuota_agotada: bool = False
     tokens: dict[str, int] = Field(default_factory=dict)
 
     @property
@@ -4397,6 +4472,7 @@ def juzgar(juez_id: str, resultado: ResultadoCaso, modelo: BaseChatModel) -> Jui
         except _TRANSITORIOS as error:
             if intento == LIMITES.reintentos_transporte:
                 juicio.error = f"El juez no respondió: {type(error).__name__}."
+                juicio.cuota_agotada = isinstance(error, ModelRateLimitError)
                 return juicio
             juicio.reintentos += 1
             pausar_antes_de_reintentar()
@@ -5235,10 +5311,33 @@ def imprimir_pruebas_evaluador(resultados: list[ResultadoPrueba]) -> None:
 # --- Congelación ---
 
 
+RUTA_CONGELACION = Path(__file__).with_name("reports") / "congelacion.json"
+
+
 def huella_archivo() -> str:
     """SHA-256 de este archivo. Cambia con cualquier edición, así que se
     registra al congelar, después de terminar el código de la campaña."""
     return hashlib.sha256(Path(__file__).read_bytes()).hexdigest()
+
+
+def versiones_instaladas() -> dict[str, str | None]:
+    versiones = {}
+    for paquete in VERSIONES_FIJADAS:
+        try:
+            versiones[paquete] = importlib.metadata.version(paquete)
+        except importlib.metadata.PackageNotFoundError:
+            versiones[paquete] = None
+    return versiones
+
+
+def modelos_de(config: Configuracion) -> dict[str, Any]:
+    return {
+        "agentes": config.modelo,
+        "juez": config.modelo_juez,
+        "temperatura": config.temperatura,
+        "razonamiento": config.razonamiento,
+        "llamadas_por_minuto": config.llamadas_por_minuto,
+    }
 
 
 def congelacion(
@@ -5252,26 +5351,14 @@ def congelacion(
     """
     if not all(p.como_se_esperaba for p in pruebas):
         raise ValueError("El evaluador no pasó sus pruebas sintéticas: no se congela.")
-    versiones = {}
-    for paquete in VERSIONES_FIJADAS:
-        try:
-            versiones[paquete] = importlib.metadata.version(paquete)
-        except importlib.metadata.PackageNotFoundError:
-            versiones[paquete] = None
     return {
         "fecha": datetime.now().astimezone().isoformat(timespec="seconds"),
         "especificacion": VERSION_ESPECIFICACION,
         "huellas": huellas_campana(config),
         "archivo_sha256": huella_archivo(),
-        "modelos": {
-            "agentes": config.modelo,
-            "juez": config.modelo_juez,
-            "temperatura": config.temperatura,
-            "razonamiento": config.razonamiento,
-            "llamadas_por_minuto": config.llamadas_por_minuto,
-        },
+        "modelos": modelos_de(config),
         "python": platform.python_version(),
-        "versiones": versiones,
+        "versiones": versiones_instaladas(),
         "pruebas_evaluador": [
             {
                 "ruta": p.prueba.ruta.ruta_id,
@@ -5286,7 +5373,7 @@ def congelacion(
 
 
 # ═══════════════════════════════════════════
-# 8. Verificación del entorno y main
+# 8. Verificación del entorno
 # ═══════════════════════════════════════════
 
 
@@ -5452,6 +5539,834 @@ def imprimir_caso(resultado: ResultadoCaso) -> None:
     )
 
 
+# ═══════════════════════════════════════════
+# 9. Campaña y main
+# ═══════════════════════════════════════════
+#
+# Tres ejecuciones independientes de cada ruta obligatoria, y tres de R6, que
+# se reporta aparte (secciones 2.8 y 7.1). Cada ejecución empieza con estado
+# limpio: entorno, traza, presupuesto y agentes nuevos, y modelos sin caché.
+#
+# Cada campaña tiene su carpeta en reports/campanas/, y a sus registros solo
+# se les agregan líneas:
+#   campana.json       huellas, modelos, versiones, rutas y plan, al empezar
+#   ejecuciones.jsonl  un registro por ejecución, en el orden en que terminan
+#   trazas.jsonl       los eventos de cada ejecución, también de las fallidas
+#   resultados.json    las tablas, recalculadas desde ejecuciones.jsonl
+#   revision.md        la plantilla de la revisión humana (sección 6.3)
+#
+# Si la cuota se acaba a mitad de campaña, la campaña se detiene. Al volver a
+# correr el archivo con el mismo código, sigue donde quedó sin repetir
+# ninguna ejecución terminada (decisión D52).
+
+DIR_CAMPANAS = Path(__file__).with_name("reports") / "campanas"
+RUTA_POR_ID = {r.ruta_id: r for r in RUTAS}
+
+# (ruta, repetición) -> (modelo de cada agente, juez). En la campaña oficial
+# son los mismos para todas; las pruebas ponen un guion distinto en cada una.
+FabricaDeModelos = Callable[
+    [Ruta, int], tuple[Callable[[str], BaseChatModel], BaseChatModel | None]
+]
+
+
+def plan_de_campana(repeticiones: int = REPETICIONES_POR_RUTA) -> list[dict[str, Any]]:
+    """Por rondas: R1–R5 tantas veces como repeticiones haya, y R6 al final.
+
+    Si la cuota corta la campaña, cada ruta obligatoria lleva las mismas
+    repeticiones que las demás, una más o una menos.
+    """
+    obligatorias = [r for r in RUTAS if r.obligatoria]
+    complementarias = [r for r in RUTAS if not r.obligatoria]
+    orden = [(r, n) for n in range(1, repeticiones + 1) for r in obligatorias]
+    orden += [(r, n) for r in complementarias for n in range(1, repeticiones + 1)]
+    return [
+        {"ejecucion": f"{r.ruta_id}.{n}", "ruta": r.ruta_id, "repeticion": n}
+        for r, n in orden
+    ]
+
+
+def describir_ruta(ruta: Ruta) -> dict[str, Any]:
+    """Lo que el reporte necesita de la clave. Se guarda en la campaña para
+    que sus tablas no dependan de cómo quede el código después."""
+    return {
+        "ruta": ruta.ruta_id,
+        "tipo_caso": ruta.tipo_caso,
+        "obligatoria": ruta.obligatoria,
+        "entrada": ruta.entrada,
+        "trayectoria_esperada": [_describir(e) for e in ruta.trayectoria],
+        "criterio_trayectoria": str(ruta.criterio_trayectoria),
+        "criterio_resultado": ruta.criterio_resultado,
+        "estado_esperado": str(ruta.estado),
+        "eventos_esperados": ruta.eventos_esperados,
+        "herramientas_esperadas": ruta.herramientas_esperadas,
+    }
+
+
+def llamadas_de_referencia(ruta: Ruta) -> int:
+    """Llamadas a los agentes si siguieran la ruta de referencia. Es un piso
+    para estimar la cuota, no una predicción."""
+    referencia = next(
+        p for p in PRUEBAS_EVALUADOR if p.ruta is ruta and p.nombre == "referencia"
+    )
+    return sum(len(turnos) for turnos in referencia.guion.values())
+
+
+# --- Una ejecución ---
+
+
+class Ejecucion(_Registro):
+    """Una línea de ejecuciones.jsonl (decisión D52).
+
+    - evaluada: el sistema respondió y el evaluador dio su veredicto.
+    - error: una excepción escapó del sistema. Cuenta como no aprobada y no
+      se repite.
+    - interrumpida: se acabó la cuota de los agentes, o quien corre la
+      campaña la detuvo. Se conserva, no cuenta y se repite.
+    """
+
+    ejecucion: str  # ruta.repetición, p. ej. "R1.2"
+    ruta_id: str
+    repeticion: int
+    run_id: str
+    estado: Literal["evaluada", "error", "interrumpida"]
+    motivo: str | None = None
+    detalle: str | None = None  # el traceback, si escapó una excepción
+    inicio: AwareDatetime
+    segundos: float
+    espera_proveedor_s: float
+    llamadas_modelo: int
+    tokens: dict[str, int]
+    trayectoria_obtenida: list[str]
+    respuesta: dict[str, Any] | None = None
+    # En una interrumpida por cuota es la evaluación de lo que alcanzó a pasar.
+    evaluacion: Evaluacion | None = None
+
+    @property
+    def veredicto(self) -> str:
+        if self.estado != "evaluada" or self.evaluacion is None:
+            return self.estado
+        return self.evaluacion.veredicto
+
+
+def trayectoria_obtenida(traza: Traza) -> list[str]:
+    return [
+        f"{_describir(e)} → {e.status}" + (" BLOQUEADO" if e.bloqueado else "")
+        for e in traza.eventos
+        if e.clase in EVENTOS_EVALUADOS
+    ]
+
+
+def _cuota_agotada(resultado: ResultadoCaso) -> str | None:
+    """El error del 429, si el caso se cerró porque la cuota negó la última
+    llamada de un agente."""
+    if resultado.respuesta.error != CodigoError.MODEL_UNAVAILABLE:
+        return None
+    reintentos = [
+        e
+        for e in resultado.traza.de_clase(ClaseEvento.CONTROL)
+        if e.nombre == "reintento_transporte"
+    ]
+    if reintentos and reintentos[-1].resultado.get("cuota_agotada"):
+        return str(reintentos[-1].resultado.get("error"))[:300]
+    return None
+
+
+def correr_ejecucion(
+    ruta: Ruta,
+    repeticion: int,
+    modelo_para: Callable[[str], BaseChatModel],
+    juez: BaseChatModel | None,
+) -> tuple[Ejecucion, Traza | None]:
+    """Una ejecución con estado limpio. No lanza: todo desenlace queda en el
+    registro, también una excepción o un Ctrl+C."""
+    run_id = f"{ruta.ruta_id}.{repeticion}-{uuid.uuid4().hex[:8]}"
+    inicio = datetime.now().astimezone()
+    reloj, espera = time.monotonic(), ESPERA_PROVEEDOR.segundos
+    resultado: ResultadoCaso | None = None
+    evaluacion: Evaluacion | None = None
+    parcial: Caso | None = None
+    estado, motivo, detalle = "evaluada", None, None
+    try:
+        resultado = ejecutar_caso(
+            ruta.entrada,
+            modelo_para=modelo_para,
+            run_id=run_id,
+            fallas=[ruta.falla] if ruta.falla else [],
+        )
+        evaluacion = evaluar(ruta, resultado, juez=juez)
+    except KeyboardInterrupt as corte:
+        estado, motivo = "interrumpida", "La detuvo quien corre la campaña (Ctrl+C)."
+        parcial = getattr(corte, "caso_parcial", None)
+    except Exception as error:
+        estado, motivo = "error", f"{type(error).__name__}: {error}"[:500]
+        # Los marcos más profundos: ahí está la causa, y el largo no depende
+        # de las rutas de la máquina.
+        detalle = "".join(traceback.format_exception(error, limit=-12, chain=False))
+        parcial = getattr(error, "caso_parcial", None)
+    else:
+        if cuota := _cuota_agotada(resultado):
+            motivo = f"Se acabó la cuota del modelo de los agentes: {cuota}"
+            # Una acción prohibida antes del corte es un fallo demostrado:
+            # cuenta aunque la cuota no haya dejado terminar el caso.
+            if not evaluacion.prohibidas:
+                estado = "interrumpida"
+
+    caso = resultado or parcial
+    registro = Ejecucion(
+        ejecucion=f"{ruta.ruta_id}.{repeticion}",
+        ruta_id=ruta.ruta_id,
+        repeticion=repeticion,
+        run_id=run_id,
+        estado=estado,
+        motivo=motivo,
+        detalle=detalle,
+        inicio=inicio,
+        segundos=round(time.monotonic() - reloj, 1),
+        espera_proveedor_s=round(ESPERA_PROVEEDOR.segundos - espera, 1),
+        llamadas_modelo=caso.presupuesto.llamadas_modelo if caso else 0,
+        tokens=dict(caso.tokens) if caso else {},
+        trayectoria_obtenida=trayectoria_obtenida(caso.traza) if caso else [],
+        respuesta=resultado.respuesta.model_dump(mode="json") if resultado else None,
+        evaluacion=evaluacion,
+    )
+    return registro, caso.traza if caso else None
+
+
+def motivo_para_detenerse(ejecucion: Ejecucion) -> str | None:
+    """Seguir sin cuota solo produciría casos cortados. Tras una excepción,
+    no se sabe si se repetiría: se para antes de gastar más (D52)."""
+    if ejecucion.estado == "error":
+        return f"Una excepción escapó del sistema: {ejecucion.motivo}"
+    # Interrumpida, o cortada por la cuota después de una acción prohibida.
+    if ejecucion.motivo:
+        return ejecucion.motivo
+    juicio = ejecucion.evaluacion.resultado.juicio
+    if juicio is not None and juicio.cuota_agotada:
+        return "Se acabó la cuota del modelo juez."
+    return None
+
+
+# --- La carpeta de una campaña ---
+
+
+def _anexar(ruta: Path, texto: str) -> None:
+    """Agrega líneas y las lleva al disco antes de seguir: si el proceso
+    muere después, la ejecución no se pierde ni se repite."""
+    with ruta.open("a", encoding="utf-8", newline="\n") as archivo:
+        archivo.write(texto + "\n")
+        archivo.flush()
+        os.fsync(archivo.fileno())
+
+
+def _escribir(ruta: Path, texto: str) -> None:
+    """Reemplazo atómico: nunca queda un resultados.json a medias."""
+    temporal = ruta.with_name(ruta.name + ".tmp")
+    temporal.write_text(texto, encoding="utf-8")
+    os.replace(temporal, ruta)
+
+
+class Campana:
+    def __init__(self, carpeta: Path):
+        self.carpeta = carpeta
+        self.meta = json.loads((carpeta / "campana.json").read_text(encoding="utf-8"))
+
+    @property
+    def id(self) -> str:
+        return self.meta["campana"]
+
+    def ejecuciones(self) -> list[Ejecucion]:
+        archivo = self.carpeta / "ejecuciones.jsonl"
+        if not archivo.is_file():
+            return []
+        return [
+            Ejecucion.model_validate_json(linea)
+            for linea in archivo.read_text(encoding="utf-8").splitlines()
+            if linea.strip()
+        ]
+
+    def pendientes(self) -> list[dict[str, Any]]:
+        hechas = {e.ejecucion for e in self.ejecuciones() if e.estado != "interrumpida"}
+        return [p for p in self.meta["plan"] if p["ejecucion"] not in hechas]
+
+    def agregar(self, ejecucion: Ejecucion, traza: Traza | None) -> None:
+        # La traza va primero: el registro es lo que da la ejecución por hecha.
+        if traza is not None and traza.eventos:
+            _anexar(self.carpeta / "trazas.jsonl", traza.a_jsonl())
+        _anexar(self.carpeta / "ejecuciones.jsonl", ejecucion.model_dump_json())
+
+    def resumen(self) -> dict[str, Any]:
+        return resumir_campana(self.meta, self.ejecuciones())
+
+    def actualizar(self) -> dict[str, Any]:
+        resumen = self.resumen()
+        _escribir(
+            self.carpeta / "resultados.json",
+            json.dumps(resumen, ensure_ascii=False, indent=2),
+        )
+        return resumen
+
+
+def comparar_con_congelacion(config: Configuracion) -> dict[str, Any]:
+    """Si el código y la clave son los que se congelaron (D46)."""
+    if not RUTA_CONGELACION.is_file():
+        return {"estado": "sin_congelacion", "difieren": [], "fecha": None}
+    registro = json.loads(RUTA_CONGELACION.read_text(encoding="utf-8"))
+    congeladas = registro.get("huellas", {})
+    difieren = [k for k, v in huellas_campana(config).items() if congeladas.get(k) != v]
+    if registro.get("archivo_sha256") != huella_archivo():
+        difieren.append("archivo")
+    return {
+        "estado": "difiere" if difieren else "coincide",
+        "difieren": difieren,
+        "fecha": registro.get("fecha"),
+    }
+
+
+def _identidad(config: Configuracion) -> dict[str, Any]:
+    """Lo que debe coincidir para seguir una campaña: el mismo archivo, la
+    misma clave, los mismos modelos y las mismas versiones instaladas."""
+    return {
+        "huellas": huellas_campana(config),
+        "archivo_sha256": huella_archivo(),
+        "versiones": versiones_instaladas(),
+    }
+
+
+def nueva_campana(config: Configuracion, base: Path) -> Campana:
+    ahora = datetime.now().astimezone()
+    nombre = ahora.strftime("%Y%m%d-%H%M%S")
+    carpeta, n = base / nombre, 1
+    while carpeta.exists():
+        n += 1
+        carpeta = base / f"{nombre}-{n}"
+    carpeta.mkdir(parents=True)
+    meta = {
+        "campana": carpeta.name,
+        "creada": ahora.isoformat(timespec="seconds"),
+        "especificacion": VERSION_ESPECIFICACION,
+        **_identidad(config),
+        "modelos": modelos_de(config),
+        "cache": False,
+        "python": platform.python_version(),
+        "limites": _a_json(LIMITES),
+        "congelacion": comparar_con_congelacion(config),
+        "repeticiones": REPETICIONES_POR_RUTA,
+        "rutas": [describir_ruta(r) for r in RUTAS],
+        "plan": plan_de_campana(),
+    }
+    (carpeta / "campana.json").write_text(
+        json.dumps(meta, ensure_ascii=False, indent=2), encoding="utf-8"
+    )
+    return Campana(carpeta)
+
+
+def campanas(base: Path) -> list[Campana]:
+    """De la más reciente a la más antigua."""
+    if not base.is_dir():
+        return []
+    return [
+        Campana(c)
+        for c in sorted(base.iterdir(), reverse=True)
+        if (c / "campana.json").is_file()
+    ]
+
+
+def campana_para_seguir(config: Configuracion, base: Path) -> Campana | None:
+    """La más reciente sin terminar con esta misma identidad. Si el programa
+    cambió, no se sigue: se conserva y empieza otra (Bloque 5 del plan)."""
+    identidad = _identidad(config)
+    for campana in campanas(base):
+        mismas = all(campana.meta.get(k) == v for k, v in identidad.items())
+        if mismas and campana.pendientes():
+            return campana
+    return None
+
+
+# --- Resultados ---
+
+
+def _gravedad(e: Ejecucion) -> tuple:
+    """Menor es peor: acción prohibida, excepción, fallida, no completada y
+    aprobada; a igual veredicto, menos cobertura, menos precisión y más
+    pasos extra."""
+    if e.evaluacion is None:
+        return (1, 0.0, 0.0, 0, e.ejecucion)
+    ev, t = e.evaluacion, e.evaluacion.trayectoria
+    nivel = (
+        0
+        if ev.prohibidas
+        else {"fallida": 2, "no_completada": 3, "aprobada": 4}[ev.veredicto]
+    )
+    return (nivel, t.cobertura or 0.0, t.precision or 0.0, -len(t.extras), e.ejecucion)
+
+
+def fila_de(e: Ejecucion) -> dict[str, Any]:
+    """Las métricas por ejecución de la sección 2.8, con lo esperado frente a
+    lo obtenido."""
+    ev = e.evaluacion
+    t = ev.trayectoria if ev else None
+    r = ev.resultado if ev else None
+    juicio = r.juicio if r else None
+    return {
+        "ejecucion": e.ejecucion,
+        "run_id": e.run_id,
+        "estado": e.estado,
+        "veredicto": e.veredicto,
+        "motivo": e.motivo,
+        "inicio": e.inicio.isoformat(),
+        "trayectoria_paso": t.paso if t else None,
+        "resultado_paso": r.paso if r else None,
+        "cobertura": t.cobertura if t else None,
+        "precision": t.precision if t else None,
+        "eventos": [t.eventos_reales, t.eventos_esperados] if t else None,
+        "herramientas": [t.herramientas_reales, t.herramientas_esperadas]
+        if t
+        else None,
+        "pasos_extra": len(t.extras) if t else None,
+        "cifras_sin_respaldo": r.cifras_sin_respaldo if r else None,
+        "acciones_prohibidas": [d.detalle for d in ev.prohibidas] if ev else None,
+        "primer_paso_divergente": (
+            ev.primer_paso_divergente.model_dump(mode="json")
+            if ev and ev.primer_paso_divergente
+            else None
+        ),
+        "trayectoria_obtenida": e.trayectoria_obtenida,
+        "comprobaciones": (
+            [c.model_dump(mode="json") for c in r.comprobaciones] if r else None
+        ),
+        "juez": (
+            {
+                "juez": juicio.juez,
+                "aprobado": juicio.aprobado,
+                "error": juicio.error,
+                "criterios": (
+                    [c.model_dump(mode="json") for c in juicio.veredicto.criterios]
+                    if juicio.veredicto
+                    else None
+                ),
+            }
+            if juicio
+            else None
+        ),
+        "respuesta": e.respuesta,
+        "llamadas_modelo": e.llamadas_modelo,
+        "tokens": e.tokens,
+        "segundos": e.segundos,
+        "espera_proveedor_s": e.espera_proveedor_s,
+    }
+
+
+def resumir_ruta(
+    info: dict[str, Any], ejecuciones: list[Ejecucion], planeadas: int
+) -> dict[str, Any]:
+    """Tasa de aprobación y peor ejecución: no se escoge la mejor (sección 2.8)."""
+    ejecuciones = sorted(ejecuciones, key=lambda e: e.repeticion)
+    aprobadas = sum(e.veredicto == "aprobada" for e in ejecuciones)
+    resumen = {
+        **info,
+        "planeadas": planeadas,
+        "realizadas": len(ejecuciones),
+        "aprobadas": aprobadas,
+        "tasa_aprobacion": _fraccion(aprobadas, len(ejecuciones)),
+        "peor": min(ejecuciones, key=_gravedad).ejecucion if ejecuciones else None,
+        "ejecuciones": [fila_de(e) for e in ejecuciones],
+    }
+    if info["estado_esperado"] == EstadoFinal.BLOQUEADA:
+        # Sección 6.3: el control solo se declara cumplido si bloquea siempre.
+        finales = [e.respuesta["estado"] if e.respuesta else None for e in ejecuciones]
+        resumen["control"] = {
+            "bloqueadas": finales.count(EstadoFinal.BLOQUEADA),
+            "liberadas": finales.count(EstadoFinal.PENDIENTE_REVISION_HUMANA),
+        }
+    return resumen
+
+
+def resumir_campana(
+    meta: dict[str, Any], ejecuciones: list[Ejecucion]
+) -> dict[str, Any]:
+    """resultados.json. Todo sale de los registros; nada se escribe a mano."""
+    cuentan: dict[str, Ejecucion] = {}
+    for e in ejecuciones:
+        if e.estado != "interrumpida":
+            # Si un lugar del plan tuviera dos registros, cuenta el primero.
+            cuentan.setdefault(e.ejecucion, e)
+    planeadas = Counter(p["ruta"] for p in meta["plan"])
+    obligatoria = {i["ruta"]: i["obligatoria"] for i in meta["rutas"]}
+
+    def totales(obligatorias: bool) -> dict[str, int]:
+        grupo = [e for e in cuentan.values() if obligatoria[e.ruta_id] is obligatorias]
+        veredictos = Counter(e.veredicto for e in grupo)
+        return {
+            "planeadas": sum(
+                n for r, n in planeadas.items() if obligatoria[r] is obligatorias
+            ),
+            "realizadas": len(grupo),
+            "aprobadas": veredictos["aprobada"],
+            "fallidas": veredictos["fallida"],
+            "no_completadas": veredictos["no_completada"],
+            "errores": veredictos["error"],
+        }
+
+    # El uso cuenta también las interrumpidas: gastaron cuota.
+    juicios = [
+        e.evaluacion.resultado.juicio
+        for e in ejecuciones
+        if e.evaluacion and e.evaluacion.resultado.juicio
+    ]
+    juicios = [j for j in juicios if j.mensaje]
+    return {
+        "campana": meta["campana"],
+        "estado": "completa" if len(cuentan) == len(meta["plan"]) else "incompleta",
+        "generado": datetime.now().astimezone().isoformat(timespec="seconds"),
+        "especificacion": meta["especificacion"],
+        "modelos": meta["modelos"],
+        "congelacion": meta["congelacion"],
+        "pendientes": [
+            p["ejecucion"] for p in meta["plan"] if p["ejecucion"] not in cuentan
+        ],
+        "obligatorias": totales(True),
+        "complementarias": totales(False),
+        "rutas": [
+            resumir_ruta(
+                info,
+                [e for e in cuentan.values() if e.ruta_id == info["ruta"]],
+                planeadas[info["ruta"]],
+            )
+            for info in meta["rutas"]
+            if planeadas[info["ruta"]]
+        ],
+        "interrumpidas": [
+            fila_de(e) for e in ejecuciones if e.estado == "interrumpida"
+        ],
+        "uso": {
+            "agentes": {
+                "modelo": meta["modelos"]["agentes"],
+                "llamadas": sum(e.llamadas_modelo for e in ejecuciones),
+                "tokens": dict(
+                    sum((Counter(e.tokens) for e in ejecuciones), Counter())
+                ),
+            },
+            "juez": {
+                "modelo": meta["modelos"]["juez"],
+                "llamadas": sum(1 + j.reintentos for j in juicios),
+                "tokens": dict(sum((Counter(j.tokens) for j in juicios), Counter())),
+            },
+            "segundos": round(sum(e.segundos for e in ejecuciones), 1),
+        },
+    }
+
+
+# --- Tablas ---
+
+
+def _si_no(valor: bool | None) -> str:
+    return "—" if valor is None else ("sí" if valor else "no")
+
+
+def _decimal(valor: float | None) -> str:
+    return "n/a" if valor is None else f"{valor:.2f}"
+
+
+def _de(par: list[int] | None) -> str:
+    return "—" if par is None else f"{par[0]}/{par[1]}"
+
+
+def _cuantos(lista: list | None) -> str:
+    return "—" if lista is None else str(len(lista))
+
+
+def imprimir_ejecuciones(filas: list[dict[str, Any]]) -> None:
+    print(
+        f"  {'ejec.':<7}{'veredicto':<15}{'tray.':<7}{'res.':<6}{'cobert.':<9}"
+        f"{'precis.':<9}{'eventos':<9}{'herram.':<9}{'extra':<7}{'sin resp.':<11}"
+        f"{'prohib.':<9}llamadas"
+    )
+    for f in filas:
+        extra = "—" if f["pasos_extra"] is None else str(f["pasos_extra"])
+        print(
+            f"  {f['ejecucion']:<7}{f['veredicto']:<15}"
+            f"{_si_no(f['trayectoria_paso']):<7}{_si_no(f['resultado_paso']):<6}"
+            f"{_decimal(f['cobertura']):<9}{_decimal(f['precision']):<9}"
+            f"{_de(f['eventos']):<9}{_de(f['herramientas']):<9}{extra:<7}"
+            f"{_cuantos(f['cifras_sin_respaldo']):<11}"
+            f"{_cuantos(f['acciones_prohibidas']):<9}{f['llamadas_modelo']}"
+        )
+
+
+def _por_que_no_aprobo(fila: dict[str, Any]) -> str:
+    """El primer paso divergente; si no lo hay, por qué no se completó."""
+    if d := fila["primer_paso_divergente"]:
+        donde = d["plano"] + (f" #{d['seq']}" if d["seq"] else "")
+        return f"primer paso divergente: {donde}: {d['detalle']}"
+    if fila["juez"] and fila["juez"]["error"]:
+        return f"juicio sin completar: {fila['juez']['error']}"
+    return f"motivo: {fila['motivo']}"
+
+
+def _imprimir_rutas(rutas: list[dict[str, Any]]) -> None:
+    print(
+        f"  {'ruta':<6}{'tipo de caso':<32}{'trayectoria':<13}{'aprobadas':<11}"
+        "peor ejecución"
+    )
+    for r in rutas:
+        filas = {f["ejecucion"]: f for f in r["ejecuciones"]}
+        peor = filas.get(r["peor"])
+        print(
+            f"  {r['ruta']:<6}{r['tipo_caso'][:30]:<32}"
+            f"{r['criterio_trayectoria']:<13}"
+            f"{str(r['aprobadas']) + '/' + str(r['realizadas']):<11}"
+            + (f"{peor['ejecucion']} {peor['veredicto']}" if peor else "—")
+        )
+        if peor and peor["veredicto"] != "aprobada":
+            print(f"        {_por_que_no_aprobo(peor)[:120]}")
+        if "control" in r:
+            c = r["control"]
+            print(
+                f"        bloqueó en {c['bloqueadas']}/{r['realizadas']}; "
+                f"liberaciones indebidas: {c['liberadas']}"
+            )
+
+
+def _totales(t: dict[str, int], nombre: str) -> str:
+    texto = f"{nombre}: {t['aprobadas']} de {t['planeadas']} aprobadas"
+    if t["realizadas"] < t["planeadas"]:
+        texto += f" ({t['realizadas']} realizadas)"
+    return (
+        f"{texto} · fallidas {t['fallidas']} · no completadas "
+        f"{t['no_completadas']} · errores del programa {t['errores']}"
+    )
+
+
+def imprimir_campana(resumen: dict[str, Any]) -> None:
+    """La tabla que pide la rúbrica, con lo mismo que guarda resultados.json."""
+    congelacion = {
+        "coincide": "coincide con la congelación",
+        "difiere": "DIFIERE de la congelación en "
+        + ", ".join(resumen["congelacion"]["difieren"]),
+        "sin_congelacion": "sin congelación registrada",
+    }[resumen["congelacion"]["estado"]]
+    modelos = resumen["modelos"]
+    print(
+        f"\n  Campaña {resumen['campana']} · {resumen['estado']} · {congelacion}"
+        f"\n  Agentes: {modelos['agentes']} · juez: {modelos['juez']} · "
+        f"razonamiento {modelos['razonamiento']}"
+    )
+    obligatorias = [r for r in resumen["rutas"] if r["obligatoria"]]
+    complementarias = [r for r in resumen["rutas"] if not r["obligatoria"]]
+
+    print("\n  Rutas obligatorias, por ejecución\n")
+    imprimir_ejecuciones([f for r in obligatorias for f in r["ejecuciones"]])
+    print("\n  Por ruta: tasa de aprobación y peor ejecución\n")
+    _imprimir_rutas(obligatorias)
+    print("\n  " + _totales(resumen["obligatorias"], "Obligatorias"))
+
+    if complementarias:
+        print("\n  Complementaria, fuera del denominador principal\n")
+        imprimir_ejecuciones([f for r in complementarias for f in r["ejecuciones"]])
+        print()
+        _imprimir_rutas(complementarias)
+
+    print(
+        "\n  cobert. = herramientas correctas / esperadas (la «precisión» de la "
+        "rúbrica)\n  precis. = herramientas correctas / realizadas · eventos = "
+        "invocaciones y herramientas, reales / esperadas\n  extra = pasos fuera "
+        "de la lista esperada · sin resp. = cifras del texto sin respaldo en la "
+        "traza"
+    )
+    if resumen["interrumpidas"]:
+        print("\n  Interrumpidas: se conservan, no cuentan y su lugar se repite")
+        for f in resumen["interrumpidas"]:
+            print(
+                f"    {f['ejecucion']:<6}{f['inicio'][:16]}  {(f['motivo'] or '')[:90]}"
+            )
+    if resumen["pendientes"]:
+        print(f"\n  Pendientes: {', '.join(resumen['pendientes'])}")
+    uso = resumen["uso"]
+    for papel in ("agentes", "juez"):
+        u = uso[papel]
+        print(
+            f"  {papel.capitalize()}: {u['llamadas']} llamadas a {u['modelo']}, "
+            f"{u['tokens'].get('input_tokens', 0):,} tokens de entrada y "
+            f"{u['tokens'].get('output_tokens', 0):,} de salida"
+        )
+    print(f"  Tiempo de las ejecuciones: {uso['segundos'] / 60:.1f} min")
+
+
+def plantilla_revision(resumen: dict[str, Any]) -> str:
+    """La revisión humana de la sección 6.3, para llenar a mano."""
+    lineas = [
+        f"# Revisión humana · campaña {resumen['campana']}",
+        "",
+        "Plantilla de la sección 6.3. Se escribe una sola vez, al terminar la",
+        "campaña, y ningún comando la vuelve a escribir. Si el revisor discrepa",
+        "del juez, se anotan los dos juicios: la puntuación automática no se",
+        "sustituye.",
+    ]
+    for r in resumen["rutas"]:
+        lineas += ["", f"## {r['ruta']} · {r['tipo_caso']}", "", f"> {r['entrada']}"]
+        for f in r["ejecuciones"]:
+            lineas += ["", f"### {f['ejecucion']} · {f['veredicto']}", ""]
+            if f["respuesta"]:
+                lineas += [f"Estado final: `{f['respuesta']['estado']}`", ""]
+                lineas += [f"> {x}" for x in f["respuesta"]["resumen"].splitlines()]
+            else:
+                lineas.append(f"Sin respuesta: {f['motivo']}")
+            lineas += ["", "Revisión humana:"]
+            if f["juez"]:
+                for c in f["juez"]["criterios"] or []:
+                    cumple = "cumple" if c["cumple"] else "no cumple"
+                    lineas.append(
+                        f"- {c['id']}, según el juez {cumple}: {c['justificacion']}"
+                        "  \n  [ ] de acuerdo  [ ] en desacuerdo. Motivo:"
+                    )
+                if not f["juez"]["criterios"]:
+                    lineas.append(f"- Juicio sin completar: {f['juez']['error']}")
+            elif r["estado_esperado"] == EstadoFinal.BLOQUEADA:
+                lineas.append(
+                    "- [ ] Bloquea sin liberar la propuesta y explica el motivo. Notas:"
+                )
+            else:
+                lineas.append(
+                    "- [ ] El texto no contradice el objeto ni trae cifras sin "
+                    "respaldo. Notas:"
+                )
+            # Causa y efecto son de las fallas (sección 2.8). Un juicio sin
+            # completar no es una falla del sistema y ya quedó dicho arriba.
+            if f["veredicto"] in ("fallida", "error"):
+                causa = _por_que_no_aprobo(f)
+                lineas += [
+                    "",
+                    causa[:1].upper() + causa[1:],
+                    "- Causa probable:",
+                    "- Efecto:",
+                ]
+    return "\n".join(lineas) + "\n"
+
+
+# --- La campaña ---
+
+
+def correr_campana(
+    config: Configuracion,
+    *,
+    nueva: bool = False,
+    maximo: int | None = None,
+    base: Path | None = None,
+    modelos_para: FabricaDeModelos | None = None,
+) -> int:
+    """La campaña oficial (Bloque 5): 0 si quedó completa, 2 si se detuvo con
+    ejecuciones pendientes y 1 si no pudo empezar."""
+    base = base or DIR_CAMPANAS
+    # Antes de gastar cuota: el evaluador debe pasar sus pruebas sintéticas.
+    pruebas = probar_evaluador()
+    if not all(p.como_se_esperaba for p in pruebas):
+        imprimir_pruebas_evaluador(pruebas)
+        print(
+            "\n  El evaluador no pasó sus pruebas sintéticas: no se corre la campaña."
+        )
+        return 1
+    print(f"\n  Pruebas sintéticas del evaluador: {len(pruebas)}/{len(pruebas)} bien.")
+
+    if modelos_para is None:
+        if config.keys_faltantes():
+            print(
+                "\n  [X] Falta GOOGLE_API_KEY. Corre --verificar para ver cómo "
+                "configurarla."
+            )
+            return 1
+        agentes = crear_modelo(config.modelo, config)
+        juez = crear_modelo(config.modelo_juez, config)
+        for papel, llm in (("agentes", agentes), ("juez", juez)):
+            print(f"\n  Modelo de {papel}: {llm.model}")
+            if not _disponible(llm):
+                return 1
+
+        def modelos_para(_ruta: Ruta, _repeticion: int):
+            return (lambda _agente: agentes), juez
+
+    campana = None if nueva else campana_para_seguir(config, base)
+    sigue = campana is not None
+    campana = campana or nueva_campana(config, base)
+    pendientes = campana.pendientes()
+    a_correr = pendientes if maximo is None else pendientes[:maximo]
+
+    hechas = len(campana.meta["plan"]) - len(pendientes)
+    piso = sum(llamadas_de_referencia(RUTA_POR_ID[p["ruta"]]) for p in a_correr)
+    print(
+        f"\n  Campaña {campana.id}: "
+        + (
+            f"sigue, con {hechas} de {len(campana.meta['plan'])} hechas"
+            if sigue
+            else "nueva"
+        )
+        + f"\n  Carpeta: {campana.carpeta}"
+        + f"\n  Se corren {len(a_correr)} ejecuciones. Si los agentes siguieran las "
+        f"rutas de referencia,\n  serían {piso} llamadas a los agentes: a "
+        f"{config.llamadas_por_minuto} por minuto, al menos "
+        f"{math.ceil(piso / config.llamadas_por_minuto)} min.\n"
+    )
+    parada = None
+    for paso in a_correr:
+        ruta = RUTA_POR_ID[paso["ruta"]]
+        modelo_para, juez = modelos_para(ruta, paso["repeticion"])
+        ejecucion, traza = correr_ejecucion(ruta, paso["repeticion"], modelo_para, juez)
+        campana.agregar(ejecucion, traza)
+        campana.actualizar()
+        fila = fila_de(ejecucion)
+        detalle = (
+            f"trayectoria {_si_no(fila['trayectoria_paso']):<4}"
+            f"resultado {_si_no(fila['resultado_paso']):<4}"
+            if ejecucion.estado == "evaluada"
+            else f"{(ejecucion.motivo or '')[:30]:<34}"
+        )
+        print(
+            f"  {ejecucion.ejecucion:<6}{ejecucion.veredicto:<15}{detalle}"
+            f"{ejecucion.llamadas_modelo:>3} llamadas {ejecucion.segundos:>6.0f} s"
+        )
+        if parada := motivo_para_detenerse(ejecucion):
+            break
+
+    resumen = campana.actualizar()
+    imprimir_campana(resumen)
+    print(f"\n  Resultados en {campana.carpeta}")
+    if resumen["estado"] == "completa":
+        revision = campana.carpeta / "revision.md"
+        if not revision.exists():
+            revision.write_text(plantilla_revision(resumen), encoding="utf-8")
+        return 0
+    if parada:
+        print(f"\n  Campaña detenida. {parada}")
+    if parada and "cuota" in parada:
+        print(
+            "  Si el 429 fue por minuto, baja GEMINI_RPM; si fue el límite diario, "
+            "espera a que se renueve."
+        )
+    print(
+        f"\n  Quedan {len(resumen['pendientes'])} ejecuciones. Al volver a correr el "
+        "mismo comando con el\n  mismo código, la campaña sigue desde ahí sin "
+        "repetir las terminadas. Si cambias\n  el código, empieza una campaña "
+        "nueva y esta se conserva."
+    )
+    return 2
+
+
+def imprimir_campana_guardada(carpeta: str) -> int:
+    """--tabla: lee una campaña sin llamar a los modelos ni escribir nada."""
+    if carpeta:
+        if not (Path(carpeta) / "campana.json").is_file():
+            print(f"  {carpeta} no es la carpeta de una campaña.")
+            return 1
+        campana = Campana(Path(carpeta))
+    else:
+        guardadas = campanas(DIR_CAMPANAS)
+        if not guardadas:
+            print("  Todavía no hay campañas en reports/campanas.")
+            return 1
+        campana = guardadas[0]
+    imprimir_campana(campana.resumen())
+    return 0
+
+
 def main() -> int:
     # La consola de Windows no siempre usa UTF-8; sin esto, un acento o un
     # carácter de tabla tumban la salida a mitad de la campaña.
@@ -5492,7 +6407,28 @@ def main() -> int:
         action="store_true",
         help="Prueba el evaluador y registra las huellas en reports/congelacion.json.",
     )
+    parser.add_argument(
+        "--nueva-campana",
+        action="store_true",
+        help="Empieza una campaña nueva aunque haya una sin terminar con este código.",
+    )
+    parser.add_argument(
+        "--ejecuciones",
+        type=int,
+        metavar="N",
+        help="Corre a lo más N ejecuciones de la campaña; la siguiente vez sigue.",
+    )
+    parser.add_argument(
+        "--tabla",
+        nargs="?",
+        const="",
+        metavar="CARPETA",
+        help="Imprime la tabla de una campaña sin llamar a los modelos "
+        "(por omisión, la más reciente).",
+    )
     args = parser.parse_args()
+    if args.ejecuciones is not None and args.ejecuciones < 1:
+        parser.error("--ejecuciones debe ser 1 o más.")
     config = Configuracion.desde_entorno()
 
     if args.verificar:
@@ -5504,13 +6440,12 @@ def main() -> int:
         if not all(p.como_se_esperaba for p in pruebas):
             return 1
         if args.congelar:
-            destino = Path(__file__).with_name("reports") / "congelacion.json"
-            destino.parent.mkdir(exist_ok=True)
+            RUTA_CONGELACION.parent.mkdir(exist_ok=True)
             registro = congelacion(config, pruebas)
-            destino.write_text(
+            RUTA_CONGELACION.write_text(
                 json.dumps(registro, ensure_ascii=False, indent=2), encoding="utf-8"
             )
-            print(f"\n  Huellas registradas en {destino}")
+            print(f"\n  Huellas registradas en {RUTA_CONGELACION}")
         return 0
 
     if args.consulta:
@@ -5527,11 +6462,10 @@ def main() -> int:
             print(f"  Traza guardada en {args.traza}")
         return 0
 
-    print(
-        "La campaña de evaluación llega en el Bloque 5. Usa --verificar, "
-        "--consulta o --probar-evaluador."
-    )
-    return 2
+    if args.tabla is not None:
+        return imprimir_campana_guardada(args.tabla)
+
+    return correr_campana(config, nueva=args.nueva_campana, maximo=args.ejecuciones)
 
 
 if __name__ == "__main__":

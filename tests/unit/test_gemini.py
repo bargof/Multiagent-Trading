@@ -1,25 +1,18 @@
 """La integración con Gemini, sin red ni cuota (decisión D50).
 
-Un cliente falso ocupa el lugar de google.genai.Client: guarda cada petición
-que arma langchain-google-genai y contesta con el turno siguiente de un
-guion, convertido al formato de la API. Así las rutas de referencia pasan por
-la conversión real de mensajes, esquemas, firmas de pensamiento y errores,
-que el modelo de guion se salta. Lo que no prueba es lo que contestaría el
-modelo real: eso lo mide la campaña.
+Las rutas de referencia pasan por la conversión real de langchain-google-genai
+con el cliente falso de tests/gemini_falso.py. Lo que no prueba es lo que
+contestaría el modelo real: eso lo mide la campaña.
 """
 
-import json
-from decimal import Decimal
 from functools import cache
 from types import SimpleNamespace
 
 import httpx
 import pytest
-from google.genai import errors as genai_errors
 from google.genai import types
 from langchain_core.exceptions import ModelInvalidRequestError
 from langchain_core.messages import AIMessage
-from pydantic import BaseModel
 
 import proyecto_multiagente
 from proyecto_multiagente import (
@@ -41,90 +34,10 @@ from proyecto_multiagente import (
     herramientas_para,
     verificar_entorno,
 )
+from tests.gemini_falso import CONFIG, error_de_google, gemini
 from tests.guion import pide
 
-CONFIG = Configuracion(modelo=MODELO_AGENTES, modelo_juez=MODELO_JUEZ)
 REFERENCIAS = {p.ruta.ruta_id: p for p in PRUEBAS_EVALUADOR if p.nombre == "referencia"}
-
-
-def _a_json(valor):
-    if isinstance(valor, Decimal):
-        return float(valor)
-    if isinstance(valor, BaseModel):
-        return valor.model_dump(mode="json")
-    raise TypeError(type(valor))
-
-
-def respuesta_de_la_api(mensaje: AIMessage, modelo: str, turno: int):
-    """Un AIMessage del guion, como lo devolvería la API de Gemini."""
-    partes = [types.Part(text=mensaje.text)] if mensaje.text else []
-    for i, llamada in enumerate(mensaje.tool_calls):
-        partes.append(
-            types.Part(
-                function_call=types.FunctionCall(
-                    id=f"fc-{turno}-{i}",
-                    name=llamada["name"],
-                    # Ida y vuelta por JSON: los argumentos llegan así de la API.
-                    args=json.loads(json.dumps(llamada["args"], default=_a_json)),
-                ),
-                # Gemini firma solo la primera llamada de cada turno.
-                thought_signature=f"firma-{turno}".encode() if i == 0 else None,
-            )
-        )
-    return types.GenerateContentResponse(
-        candidates=[
-            types.Candidate(
-                content=types.Content(role="model", parts=partes),
-                finish_reason=types.FinishReason.STOP,
-            )
-        ],
-        usage_metadata=types.GenerateContentResponseUsageMetadata(
-            prompt_token_count=100,
-            candidates_token_count=10,
-            thoughts_token_count=5,
-            total_token_count=115,
-        ),
-        model_version=modelo,
-    )
-
-
-class ClienteFalso:
-    """Ocupa el lugar de google.genai.Client. `models` es él mismo."""
-
-    def __init__(self, guion=(), existe=True):
-        self.models = self
-        self.guion = list(guion)
-        self.peticiones = []
-        self.existe = existe
-
-    def generate_content(self, *, model, contents, config):
-        self.peticiones.append(
-            SimpleNamespace(model=model, contents=contents, config=config)
-        )
-        if not self.guion:
-            raise AssertionError("El guion se agotó: el agente pidió más turnos.")
-        turno = self.guion.pop(0)
-        if isinstance(turno, Exception):
-            raise turno
-        return respuesta_de_la_api(turno, model, len(self.peticiones))
-
-    def get(self, *, model):
-        if not self.existe:
-            raise genai_errors.ClientError(
-                404, {"error": {"code": 404, "status": "NOT_FOUND"}}
-            )
-        return types.Model(name=f"models/{model}")
-
-
-def gemini(nombre, guion=(), existe=True):
-    """El modelo que usa el sistema, con el cliente falso en lugar del real."""
-    with pytest.MonkeyPatch.context() as entorno:
-        # Una key cualquiera: construir el cliente no sale a la red.
-        entorno.setenv("GOOGLE_API_KEY", "AIza-sin-red")
-        llm = crear_modelo(nombre, CONFIG)
-    llm.client = ClienteFalso(guion, existe)
-    llm.rate_limiter = None  # el ritmo se prueba aparte; aquí solo haría esperar
-    return llm
 
 
 def correr(prueba, guion=None):
@@ -243,12 +156,7 @@ def test_el_juez_recibe_el_prompt_exacto_sin_herramientas():
 # --- Errores del proveedor ---
 
 
-def _error(codigo, estado):
-    cuerpo = {"error": {"code": codigo, "status": estado, "message": estado}}
-    if codigo >= 500:
-        return genai_errors.ServerError(codigo, cuerpo)
-    return genai_errors.ClientError(codigo, cuerpo)
-
+_error = error_de_google
 
 TRANSITORIOS = {
     "503_saturado": lambda: _error(503, "UNAVAILABLE"),
@@ -307,6 +215,8 @@ def test_el_ritmo_se_comparte_por_modelo(monkeypatch):
     assert a.rate_limiter is b.rate_limiter
     assert juez.rate_limiter is not a.rate_limiter
     assert a.rate_limiter.requests_per_second == pytest.approx(8 / 60)
+    # Sin caché: ni la global de LangChain (decisión D51).
+    assert a.cache is False and juez.cache is False
 
 
 def test_verificar_gasta_una_llamada_por_modelo():

@@ -395,6 +395,140 @@ quita con un aviso, y solo 3.8 lo enviaría.
 
 ### Pendiente, con la key
 
+*Sustituido: ver «Bloque 5».*
+
 - [ ] `--verificar`, que gasta dos llamadas.
 - [ ] Una consulta de desarrollo con entradas distintas de R1–R6.
 - [ ] Ver en AI Studio el límite diario de cada modelo antes de la campaña.
+
+---
+
+## Bloque 5 · 27 de octubre de 2026
+
+El ejecutor de la campaña (decisiones D51 a D54). Todo lo de esta sección se
+probó con agentes de guion y con el cliente falso de Gemini: ninguna prueba
+gastó cuota. La campaña oficial todavía no se ha corrido.
+
+**Lo que se encontró al revisar el código antes de escribir el ejecutor.**
+- El límite de 300 s por caso medía tiempo de reloj, y eso incluía el turno
+  de cuota y la pausa antes del reintento. A 8 llamadas por minuto, las 40
+  que permite un caso ya ocupan 300 s. Con un ritmo menor, el caso se habría
+  cerrado por tiempo antes de su tope de llamadas, y el ritmo habría cambiado
+  el experimento (D53).
+- Si `cache` no se fija, LangChain usa la caché global cuando alguien la
+  configura. Ahora los modelos se crean con `cache=False` (D51).
+- langchain-google-genai entrega un 429 como `GoogleRateLimitError`, una
+  subclase de `ModelRateLimitError`. La cuota se reconoce por el tipo del
+  error, sin leer su texto.
+- Una excepción que escapaba de `ejecutar_caso` se llevaba la traza del
+  caso. Ahora la traza viaja con la excepción y la campaña la guarda.
+- `main()` carga el `.env` del repo, que ya tiene la key. `tests/conftest.py`
+  ahora lo desactiva en todas las pruebas, y manda las campañas y la
+  congelación a una carpeta temporal.
+
+**Pruebas** (`tests/unit/test_campana.py`, 26). Los agentes siguen los
+guiones de referencia, y cada prueba cambia el de alguna ejecución para
+plantar lo que quiere ver.
+- *Campaña completa.* El plan va por rondas, con R6 al final. Las 18
+  ejecuciones aprueban, se escriben los cinco archivos y `resultados.json` es
+  exactamente lo que se recalcula de los registros. Se confirma el piso de
+  D50: 123 llamadas a los agentes y 6 al juez.
+- *Estado limpio.* Cada ejecución tiene su `run_id`, y su traza empieza en el
+  evento 1 con `iniciar`. El registro dice `cache: false`. Una key puesta en
+  el entorno no aparece en ningún archivo.
+- *Cuota de los agentes.* Dos 429 en R3.1 la marcan interrumpida y detienen la
+  campaña. Al volver a correr sigue la misma carpeta, repite R3.1 primero y no
+  vuelve a correr R1.1 ni R2.1. La interrumpida queda en el registro y su
+  gasto se suma al uso.
+- *Acción prohibida antes del corte.* R5.1 intenta `ejecutar_orden` y luego
+  se queda sin cuota: cuenta como fallida y no se repite.
+- *Cuota del juez.* El juicio de R1.1 queda sin completar, la campaña se
+  detiene y R1.1 no se repite.
+- *Excepción.* Un `ValueError` en A1 deja R2.1 como error, con su traceback y
+  su traza parcial. Cuenta como no aprobada, la campaña se detiene y al seguir
+  no se repite.
+- *Ctrl+C.* R2.1 queda interrumpida y su lugar se repite.
+- *Cuándo se sigue.* `--ejecuciones` limita lo que se corre y la siguiente vez
+  sigue. Un archivo distinto, otro modelo o `--nueva-campana` empiezan otra
+  campaña, y la anterior queda intacta. Si las pruebas sintéticas fallan, no
+  se corre nada.
+- *Resultados.* Con defectos plantados en R4.2, R5.2 y R5.3, la peor ejecución
+  de R5 es la de la acción prohibida y no la del argumento equivocado. R5
+  bloqueó 3 de 3 aunque solo aprobó 1, y la tabla muestra las dos cosas.
+  `revision.md` tiene un lugar por ejecución, los criterios del juez en R1 y
+  R2, el control en R5, y causa y efecto para cada falla.
+- *Congelación.* Sin archivo, la comparación dice «sin congelación»; con el
+  registro de `--congelar`, «coincide». Si se altera una huella y el SHA del
+  archivo, nombra los dos componentes.
+- *Por el cliente de Gemini.*
+  - Un 429 de Google, a los agentes o al juez, se reconoce como cuota.
+  - Un 503 no se reconoce como cuota: esa ejecución cuenta como fallida.
+  - La traza guarda la versión del modelo y el motivo de fin de cada turno.
+  - La key falsa del cliente no aparece en ningún archivo.
+- *Espera al proveedor.* Con un reloj falso, 250 s de reloj con 200 de espera
+  no cierran el caso, y 300 s más de trabajo sí. La pausa del reintento y el
+  turno del ritmo se anotan como espera.
+- *Línea de comandos.* Sin key no se corre nada. `--tabla` lee una campaña
+  sin escribir nada.
+
+**Una campaña de demostración**, con guiones y defectos plantados. La
+primera corrida se detuvo en R3.2 por un 429, con 7 ejecuciones hechas. La
+segunda siguió la misma carpeta, corrió las 11 pendientes sin repetir
+ninguna y terminó con 12 de 15 obligatorias aprobadas. Sirvió para corregir
+la presentación de la tabla:
+- un juicio sin completar mostraba un «primer paso divergente» vacío;
+- la línea de avance de una interrumpida mostraba la trayectoria de su
+  evaluación parcial;
+- la hora de inicio salía en UTC;
+- `revision.md` pedía causa y efecto también para un juicio sin
+  completar, que no es una falla del sistema.
+
+**Línea de comandos en una carpeta con solo el `.py`**, sin `.env` y con las
+variables de key vacías:
+- sin opciones, corre las pruebas sintéticas (23/23), avisa que falta la key
+  y termina con código 1 sin crear `reports/`;
+- `--tabla` avisa que no hay campañas;
+- `--ejecuciones 0` es un error de argumentos.
+
+**Prueba de mutaciones.** Se rompió cada regla nueva en una copia del repo y
+se corrieron desde la copia las pruebas de campaña y de Gemini:
+
+| Mutación | Pruebas que fallan |
+|---|---|
+| una interrumpida cuenta como hecha y no se repite | 2 |
+| la cuota marca interrumpida aunque haya acción prohibida | 1 |
+| se sigue una campaña aunque cambie el archivo | 1 |
+| la peor ejecución es la mejor | 2 |
+| la campaña no se detiene tras una excepción | 1 |
+| la espera al proveedor cuenta como trabajo | 1 |
+| los modelos usan la caché | 1 |
+| el juez sin cuota no queda marcado | 2 |
+| el uso no suma las interrumpidas | 1 |
+| copia sin mutar | 0 |
+
+La primera versión de la mutación «no se detiene tras una excepción» no rompía
+nada: el registro de un error lleva motivo, y la campaña se detenía por esa
+otra vía. Se reescribió para que el error no detenga la campaña, y la prueba
+la atrapó.
+
+**Un error de las pruebas, atrapado por la copia sin mutar.** En la primera
+vuelta de mutaciones, la copia sin mutar tenía una prueba que fallaba. El
+registro guardaba los últimos 4000 caracteres del traceback, y con las rutas
+más largas de la copia se perdía el marco que buscaba la prueba. Así, la
+tabla no distinguía esa falla de la que plantaba una mutación. Se corrigió en
+el código: ahora se guardan los 12 marcos más profundos, que no dependen del
+largo de las rutas. La prueba busca el marco que lanzó la excepción.
+
+**Resultado.**
+- `pytest`: 277 pasan (26 de campaña).
+- `ruff check` y `ruff format --check`: limpios.
+- `--probar-evaluador`: 23/23.
+
+### Pendiente, con la key
+
+- [ ] `--verificar`, que gasta dos llamadas.
+- [ ] Una consulta de desarrollo con entradas distintas de R1–R6.
+- [ ] Ver en AI Studio el límite diario de cada modelo.
+- [ ] `--congelar`, con el código final.
+- [ ] La campaña: `python proyecto_multiagente.py`, las veces que haga falta.
+- [ ] La revisión humana en `revision.md`.

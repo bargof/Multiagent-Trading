@@ -5,7 +5,8 @@ el diseño, pero implementarlo obliga a precisar detalles que el documento no
 fija, y en dos casos a cambiar una decisión (D22, que luego reemplaza D47).
 Las decisiones D36 a D46, del Bloque 4, fijan cómo el evaluador compara
 trayectorias y resultados. D47 a D50 cambian el proveedor a Gemini, por su
-capa gratuita. Todas se registran **antes**
+capa gratuita. D51 a D54, del Bloque 5, fijan cómo se corre la campaña y qué
+cuenta en ella. Todas se registran **antes**
 de ejecutar cualquier ruta de la campaña, para que ninguna se pueda leer como
 un ajuste hecho después de ver resultados. Cuando una decisión de esta
 sección contradice una anterior del documento, prevalece la de esta sección.
@@ -582,14 +583,147 @@ una.** Operacionalización; cambia D28.
 
 ---
 
+## Bloque 5
+
+**D51. La campaña.** Operacionalización de la sección 2.8 y del Bloque 5 del
+plan.
+- *Un solo comando.* `python proyecto_multiagente.py`, sin opciones, corre la
+  campaña y al terminar imprime la tabla de las rutas (criterio 1 de la
+  rúbrica).
+- *Plan fijo de 18 ejecuciones, por rondas.* Primero R1 a R5 una vez, y así
+  tres rondas; al final, R6 tres veces. Si la cuota corta la campaña, las
+  rutas obligatorias quedan con las mismas repeticiones, una más o una menos.
+- *Estado limpio.* Cada ejecución construye entorno, traza, presupuesto y
+  agentes nuevos (D34). Los modelos se crean con `cache=False`: si no,
+  LangChain usaría la caché global en caso de que alguien la configurara, y
+  una repetición podría devolver la respuesta de otra.
+- *Antes de gastar cuota.* Las 23 pruebas sintéticas deben salir como se
+  espera, y se consulta que los dos modelos existan para la key. Esa
+  consulta no gasta cuota de generación.
+- *Una carpeta por campaña* (`reports/campanas/<fecha>-<hora>/`):
+  - `campana.json`: huellas por componente, SHA-256 del archivo, modelos,
+    versiones instaladas, límites, comparación con la congelación, rutas y
+    plan. Se escribe al empezar.
+  - `ejecuciones.jsonl`: un registro por ejecución, con la evaluación
+    completa, la respuesta, las llamadas, los tokens, el tiempo y la espera
+    al proveedor.
+  - `trazas.jsonl`: los eventos de cada ejecución, también de las fallidas y
+    las interrumpidas.
+  - `resultados.json`: las tablas, recalculadas desde los registros.
+  - `revision.md`: la plantilla de la revisión humana (D54).
+
+  A los dos JSONL solo se les agregan líneas, y cada una se lleva al disco
+  antes de seguir.
+- *La traza guarda más de cada turno.* Amplía D35 con la versión del modelo
+  que respondió y el motivo de fin del turno. Una campaña repartida en varios
+  días puede cruzar una actualización del modelo, y un
+  `MALFORMED_FUNCTION_CALL` explica una falla.
+- *La congelación se compara, pero no bloquea.* Quien corre el archivo en una
+  carpeta limpia no tiene `reports/congelacion.json`. La comparación queda en
+  `campana.json` y en la tabla. La campaña que se reporte en el informe debe
+  decir «coincide».
+
+**D52. Qué cuenta, qué se repite y cuándo se detiene la campaña.** Nueva. Se
+fija antes de correr para que no pueda usarse para escoger ejecuciones
+(sección 2.8: «no se escogerá solo la mejor ejecución»).
+- Cada ejecución termina en uno de tres estados:
+  - **evaluada**: cuenta con su veredicto (D44);
+  - **error**: una excepción escapó del sistema. Cuenta como no aprobada, se
+    guarda con su traza parcial y su traceback, y no se repite;
+  - **interrumpida**: se acabó la cuota del modelo de los agentes, o quien
+    corre la campaña la detuvo con Ctrl+C. Se conserva con su traza, no
+    cuenta y su lugar del plan se repite.
+- *Cuota agotada* quiere decir que el caso se cerró con `MODEL_UNAVAILABLE` y
+  el error que agotó el único reintento fue un 429. Un 503, un timeout o un
+  corte de red no son cuota: esa ejecución cuenta, porque D30 los trata como
+  fallas del proveedor que el sistema debe manejar.
+- *Una acción prohibida antes del corte cuenta.* Es un fallo demostrado: si la
+  hubo, la ejecución cuenta como fallida aunque la cuota no la dejara
+  terminar.
+- *Si el juez se queda sin cuota*, el juicio queda sin completar (sección
+  6.2): la ejecución cuenta como `no_completada` y no se repite.
+- *La campaña se detiene* tras una interrumpida, un error o un juez sin cuota.
+  Seguir sin cuota solo produciría casos cortados, y tras una excepción no se
+  sabe si se repetiría.
+- *Para seguir*, se vuelve a correr el mismo comando. Sigue la campaña más
+  reciente sin terminar cuyo archivo, huellas y versiones instaladas sean
+  idénticos. Si algo cambió, empieza otra y la anterior se conserva («nunca
+  sobrescribir la evidencia», Bloque 5 del plan).
+  - `--nueva-campana` empieza otra a propósito.
+  - `--ejecuciones N` corre a lo más N ejecuciones, para repartir la campaña
+    si la cuota diaria es chica.
+- Las interrumpidas aparecen en la tabla y en `resultados.json` con su
+  motivo, y su gasto de cuota se suma al uso. Si un lugar del plan tuviera
+  dos registros que cuentan, cuenta el primero.
+
+**D53. La espera al proveedor no cuenta para el tiempo del caso.** Nueva;
+cambia cómo se mide el límite de 300 s de la sección 3.2.
+- *Motivo.* El límite medía tiempo de reloj. Con el ritmo de D50, cada
+  llamada puede esperar su turno 7.5 s, y la pausa antes del reintento suma
+  10 s. A 8 por minuto, las 40 llamadas que permite un caso ya ocupan 300 s.
+  Con un ritmo menor, el caso se cerraría por tiempo antes de llegar a su
+  tope de llamadas. El ritmo dejaría de ser indiferente para el experimento,
+  y D50 supone que lo es para dejarlo fuera de las huellas.
+- *Qué se descuenta.* El turno de cuota y la pausa antes del reintento. Lo
+  que tarda el modelo en responder sí cuenta.
+- Cada ejecución registra los dos tiempos: el de reloj y la espera al
+  proveedor.
+- Basta una cuenta global porque los casos corren de uno en uno, y sus
+  llamadas al modelo también.
+
+**D54. Tabla, resultados y revisión humana.** Literal y operacionalización
+de las secciones 2.8 y 6.3.
+- *Por ejecución*, las métricas de la sección 2.8:
+  - veredicto;
+  - trayectoria y resultado, por separado;
+  - cobertura y precisión;
+  - eventos y herramientas, reales sobre esperados;
+  - pasos extra, cifras sin respaldo y acciones prohibidas;
+  - llamadas al modelo.
+
+  La tabla aclara que la «precisión» de la rúbrica es la cobertura (D39).
+- *Por ruta*: aprobadas sobre realizadas y la peor ejecución, con su primer
+  paso divergente o el motivo por el que el juicio no se completó.
+  - Peor, en este orden: acción prohibida, excepción, fallida, no completada
+    y aprobada.
+  - A igual veredicto: menos cobertura, menos precisión, más pasos extra y,
+    al final, la primera.
+- *En R5*, además, cuántas veces bloqueó y cuántas liberó una propuesta
+  (sección 6.3: una sola liberación impide declarar cumplido el control). Un
+  intento de herramienta prohibida que se bloqueó reprueba la ejecución sin
+  liberar nada, y la tabla muestra las dos cosas.
+- *Totales*: las 15 obligatorias, con aprobadas, fallidas, no completadas y
+  errores por separado. R6 queda fuera del denominador.
+- *`resultados.json`* guarda, por ejecución:
+  - la trayectoria esperada y la obtenida;
+  - las comprobaciones, con lo esperado y lo observado;
+  - el juicio completo;
+  - la respuesta.
+
+  El PDF del Bloque 6 debe salir de ahí, para que sus números coincidan con
+  los del archivo.
+- *`revision.md`* se escribe una vez, al completar la campaña, y ningún
+  comando la vuelve a escribir. Tiene:
+  - los tres criterios del juez en R1 y R2, para marcar acuerdo o
+    desacuerdo;
+  - el bloqueo en R5;
+  - la revisión del texto en R3, R4 y R6;
+  - para cada ejecución fallida o con error, su primer paso divergente, con
+    espacio para la causa probable y el efecto (sección 2.8). Un juicio sin
+    completar no es una falla del sistema: se anota su motivo y nada más.
+- *`--tabla`* imprime la tabla de una campaña guardada sin escribir nada ni
+  llamar a los modelos.
+
+---
+
 ## Pendientes
 
 - **Prueba con modelos reales** (cierre del Bloque 3). Para cuidar la cuota,
   se reduce a `--verificar` (dos llamadas) y una consulta de desarrollo justo
   antes de la campaña.
-- **Cuota diaria.** Antes de la campaña hay que ver en AI Studio el límite
-  diario de cada modelo. Si no alcanza para unas 250 llamadas, el ejecutor
-  del Bloque 5 debe detenerse al agotarla y reanudar otro día sin repetir
-  las ejecuciones ya hechas. Todas se reportan, también las que fallen.
-- **Congelación** (D46). Se hace cuando esté terminado el código de la
-  campaña (Bloque 5).
+- **Cuota diaria.** Hay que ver en AI Studio el límite diario de cada modelo.
+  Si no alcanza para la campaña, esta se detiene al agotarse y sigue otro día
+  (D52). Con `--ejecuciones` se puede repartir de antemano.
+- **Congelación** (D46). El código de la campaña ya está terminado. El orden
+  es: `--verificar`, la consulta de desarrollo, `--congelar` y la campaña. Si
+  la consulta obliga a cambiar el código, se congela después del cambio.
