@@ -18,11 +18,13 @@ Proyecto final del Módulo 4 · Diplomado en AI & LLMs para Mercados Financieros
 | 1 | Configuración, contratos, datos simulados, clave del evaluador | Hecho, falta la llamada al modelo |
 | 2 | Herramientas deterministas y traza | Hecho |
 | 3 | Cinco agentes y grafo de control | Hecho con modelos de guion; falta la prueba con modelos reales |
-| 4 | Evaluador, juez y congelación | Pendiente |
+| 4 | Evaluador, juez y congelación | Hecho y probado con trazas sintéticas; la congelación espera los modelos |
 | 5 | Campaña: R1–R5 ×3, R6 ×3 aparte | Pendiente |
 | 6 | PDF de resultados, diagrama y ZIP | Pendiente |
 
-Ninguna ruta se ha ejecutado todavía. No hay resultados observados.
+Ninguna ruta se ha ejecutado todavía con modelos reales. No hay resultados
+observados: las 23 trazas de `--probar-evaluador` son pruebas del evaluador,
+no ejecuciones del sistema.
 
 ---
 
@@ -73,6 +75,23 @@ Un caso de desarrollo, fuera de la campaña oficial:
 .venv\Scripts\python proyecto_multiagente.py --consulta "..." --falla QERR --traza caso.jsonl
 ```
 
+El evaluador, comprobado con trazas que llevan un defecto plantado, sin
+modelo ni red (sección 2.8 de la especificación):
+
+```powershell
+.venv\Scripts\python proyecto_multiagente.py --probar-evaluador
+```
+
+Para la congelación, que se hace una vez, antes de la campaña:
+
+```powershell
+.venv\Scripts\python proyecto_multiagente.py --congelar
+```
+
+Primero corre las mismas pruebas sintéticas. Si todas salen como se espera,
+escribe `reports/congelacion.json` con las huellas de datos, expectativas,
+juez, agentes, límites y configuración, más el SHA-256 del archivo.
+
 Pruebas deterministas, sin modelo ni red:
 
 ```powershell
@@ -87,8 +106,9 @@ Pruebas deterministas, sin modelo ni red:
 ```
 proyecto_multiagente.py   entregable 1: sistema y evaluación en un solo archivo
 tests/unit/               pruebas deterministas: contratos, datos, clave,
-                          herramientas, Mesa y grafo
-tests/guion.py            modelo falso con guion, para probar el grafo sin red
+                          herramientas, Mesa, grafo y evaluador
+tests/guion.py            reexporta el modelo de guion del ejecutable, para
+                          probar el grafo sin red
 docs/decisiones.md        sección 10 para el documento de trabajo: decisiones
                           que completan la especificación v0.3
 docs/pruebas.md           registro de lo verificado en cada bloque

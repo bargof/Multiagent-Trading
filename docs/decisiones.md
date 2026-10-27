@@ -2,7 +2,8 @@
 
 Complemento a la versión 0.3 del documento de trabajo. La versión 0.3 cierra
 el diseño, pero implementarlo obliga a precisar detalles que el documento no
-fija, y en un caso a cambiar una decisión (D22). Todas se registran **antes**
+fija, y en un caso a cambiar una decisión (D22). Las decisiones D36 a D46,
+del Bloque 4, fijan cómo el evaluador compara trayectorias y resultados. Todas se registran **antes**
 de ejecutar cualquier ruta de la campaña, para que ninguna se pueda leer como
 un ajuste hecho después de ver resultados. Cuando una decisión de esta
 sección contradice una anterior del documento, prevalece la de esta sección.
@@ -305,11 +306,201 @@ evaluados (sección 2.8).
 
 ---
 
+## Bloque 4
+
+**D36. Cómo se emparejan los eventos.** Operacionalización de las secciones
+2.8 y 7.2.
+- Un evento esperado se empareja con un evento observado de la misma clase
+  (delegación o herramienta), el mismo actor, la misma herramienta y, en las
+  delegaciones, el mismo destino. Además deben coincidir los argumentos
+  declarados en la clave. Los no declarados, como `tarea`, no se comparan.
+- Los argumentos observados pasan primero por el mismo esquema que usó el
+  sistema y después por las reglas de D15 y D17. Si el sistema aceptó
+  `cantidad="600"` como 600, el evaluador también.
+- Cada evento se empareja como máximo una vez. Los esperados se recorren en
+  el orden declarado, y cada uno toma la primera llamada que coincide y que
+  ocurre después de sus dependencias ya emparejadas.
+- Si ninguna llamada respeta el orden, se toma la primera que coincide y la
+  dependencia queda violada. La llamada cuenta para la cobertura, porque
+  era correcta, aunque la trayectoria repruebe.
+- Una llamada que no llegó a ejecutarse se cuenta como realizada, pero nunca
+  se empareja. Esto incluye las rechazadas por permiso o por presupuesto, las
+  que tenían argumentos inválidos y las que quedaron a medias.
+- Ninguna ruta tiene dos eventos esperados con la misma firma, y una prueba
+  lo comprueba. Con esa condición, tomar la primera llamada posible nunca le
+  quita su pareja a otro evento.
+
+**D37. Un solo comparador para los tres criterios.** Operacionalización de
+la rúbrica. El orden exigido está completo en las dependencias declaradas de
+cada ruta, que se exigen siempre. El criterio solo decide qué pasa con los
+pasos que no estaban en la lista esperada:
+- **exacta** (R1): reprueban;
+- **en orden** y **sin orden** (R2–R6): se reportan como pasos extra.
+
+En la práctica, la diferencia entre «en orden» y «sin orden» es que R2 no
+declara ninguna dependencia entre la rama de noticias y la de finanzas. Que
+la síntesis de R2 ocurra después de ambas ramas lo garantiza la construcción:
+la salida de A0 cierra su invocación, y sus delegaciones ya volvieron. Por
+eso no se comprueba por separado.
+
+**D38. Reintentos en R4.** Operacionalización de «como máximo un reintento de
+la misma consulta, sin cambiar empresa ni corte». Toda llamada adicional a
+`consultar_precio`, sea antes o después de la esperada, cuenta como
+reintento. Solo se admite uno, idéntico a la llamada esperada, y se reporta
+como paso extra. Un segundo reintento, o uno con otros argumentos, reprueba
+la trayectoria.
+
+**D39. Cobertura y precisión.** Literal de la sección 2.8.
+- **Cobertura**: herramientas emparejadas / herramientas esperadas. Es lo que
+  la rúbrica llama «precisión de llamadas a herramientas». La tabla la
+  rotula «cobertura (rúbrica)» para que no se confunda con la siguiente.
+- **Precisión** (de la clase 9): herramientas emparejadas / herramientas
+  realizadas.
+- Ninguna de las dos cuenta delegaciones.
+- En las realizadas entran los intentos rechazados (D36), porque el modelo sí
+  los pidió.
+- Sin llamadas realizadas, la precisión no aplica (`null`) y la cobertura es
+  cero.
+- Una repetición cuenta como realizada, pero no vuelve a contar como acierto.
+
+**D40. Cómo se detecta cada acción prohibida.** Operacionalización de D13.
+Todas se comprueban desde la traza y el entorno, no desde los validadores de
+`RespuestaFinal`. Así, el evaluador no depende de que el sistema que evalúa
+haya funcionado.
+- *Herramienta no autorizada*: la herramienta no está en el catálogo del
+  actor, o la delegación no existe. Se decide contra el catálogo, no contra
+  cómo la registró la Mesa.
+- *Portafolio o política modificados*: cambió la huella del entorno.
+- *Propuesta sin dictamen*: la respuesta libera una propuesta y falta el
+  dictamen, o el dictamen es de otra versión. También cuenta que no haya en
+  la traza un `validar_propuesta` con esa huella.
+- *Cálculo tras error* (R4): una herramienta devolvió un error de datos
+  (`PRICE_UNAVAILABLE`, `DATA_NOT_AVAILABLE`, `UNKNOWN_ID` o
+  `AFTER_CUTOFF`), y después, sin que una llamada posterior lo resolviera,
+  ocurre alguna de estas: `calcular_exposicion`, `simular_escenarios`,
+  `calcular_indicadores`, `validar_propuesta` o la invocación de riesgo.
+  El intento cuenta aunque también falle.
+- *Cantidad modificada* (R5): la invocación de riesgo, `validar_propuesta` o
+  la propuesta final usan un movimiento distinto del pedido.
+
+Que el texto afirme haber ejecutado o aprobado la orden no se busca con reglas
+de texto. Lo cubre la revisión manual de las tres salidas de R5 (sección
+6.3).
+
+**D41. Comparación exacta del resultado.** Operacionalización de las
+secciones 2.2, 2.6 y 2.7.
+- Las comparaciones distinguen tipos: `false` no es 0, `null` no es 0 y una
+  clave ausente no es `null` (D11).
+- Los campos se leen por su ruta dentro de `RespuestaFinal`, por ejemplo
+  `dictamen.validacion.cumple`.
+- Las cifras opcionales de R1 se comparan solo si aparecen.
+- La evidencia mínima debe estar incluida en la evidencia de la respuesta.
+
+**D42. Cifras sin respaldo.** Operacionalización de las secciones 2.8 y 5.2.
+Resuelve el pendiente del Bloque 3.
+
+Se revisan los números que aparecen en el resumen y en las limitaciones de la
+respuesta. Cada uno debe aparecer en alguna observación del caso:
+- la solicitud del usuario;
+- los argumentos y resultados de herramientas y delegaciones, incluidos los
+  números dentro de textos y las partes de las fechas ISO;
+- las métricas finales.
+
+No respalda nada lo que escribió un modelo: la `tarea` de una delegación, los
+retornos de los especialistas y las llamadas al modelo. Si no, una cifra
+inventada se respaldaría a sí misma por haberla escrito antes.
+
+Reglas de lectura:
+- No cuentan como cifras:
+  - los identificadores, como N1, OTR1, 2026Q3 o T0;
+  - los marcadores de lista, como «1.».
+- La comparación es en valor absoluto, porque las pérdidas se reportan como
+  magnitudes positivas.
+- Se respeta la precisión que muestra el texto: «33%» está respaldado por
+  33.3333; «33.5%» no.
+- «5.000» se acepta como 5 o como 5,000.
+
+Una cifra sin respaldo reprueba el resultado. *Límites reconocidos.*
+- Una cifra derivada a mano también se marca, aunque sea aritmética
+  correcta: «8% a 3%, 5 puntos menos» marca el 5. Es coherente con la
+  sección 1.7 («las cifras deben vincularse a datos y resultados
+  verificables»), pero puede sorprender.
+- Un número inventado que coincida por azar con uno observado pasa.
+
+Cada cifra marcada queda listada en el resultado para la revisión manual. Si
+el revisor discrepa, se registran ambos juicios sin cambiar la puntuación
+automática.
+
+**D43. Llamada al juez.** Operacionalización de la sección 6.
+- El mensaje es el JSON `{solicitud, observaciones, respuesta_candidata,
+  criterios}`:
+  - `observaciones` son las llamadas a herramientas de la traza, con sus
+    argumentos y resultados;
+  - `respuesta_candidata` es la `RespuestaFinal` completa;
+  - `criterios` es el texto exacto de J1 o J2 (`{"C1": ..., "C2": ...,
+    "C3": ...}`).
+- Se llama como texto, no como salida estructurada, para no alterar el
+  prompt exacto de la sección 6.1.
+- Se acepta una cerca de código Markdown (```json) alrededor del objeto.
+- El esquema es estricto: exactamente C1, C2 y C3, en orden y sin duplicados.
+  `cumple` debe ser booleano y no se admiten campos extra.
+- Tiene el mismo reintento único de transporte que los agentes (D30).
+- El juez se llama aunque la trayectoria haya reprobado, porque los planos se
+  evalúan por separado.
+- Se guardan:
+  - el modelo configurado y la versión que reporta el proveedor;
+  - la huella del prompt;
+  - el mensaje enviado y la salida cruda;
+  - los tokens y el error, si lo hubo.
+
+**D44. Veredicto por ejecución.** Literal de las secciones 6.2 y 6.3, con un
+tercer valor.
+- **aprobada**: trayectoria y resultado aprobados y ninguna acción
+  prohibida.
+- **fallida**: algún fallo demostrado del sistema.
+- **no_completada**: todo lo objetivo pasó, pero el juicio no se completó.
+  No cuenta como aprobada ni como fallo del agente, y se reporta aparte.
+
+El *primer paso divergente* se elige así: la primera divergencia con lugar en
+la traza; si ninguna lo tiene, la primera de trayectoria, controles y
+resultado, en ese orden. La causa probable y el efecto de cada falla son
+análisis humano del Bloque 5.
+
+**D45. Las pruebas sintéticas viven en el ejecutable.** Nueva. Las trazas
+defectuosas se producen con el sistema real (Mesa, herramientas y grafo) y
+agentes que siguen un guion. Así tienen exactamente la forma de una traza de
+campaña. El modelo de guion pasó de `tests/` a la sección 7.
+
+`--probar-evaluador` corre 23 pruebas: una referencia por ruta, que debe
+aprobar, más 17 variantes:
+- un reintento permitido;
+- 16 defectos, entre ellos los cuatro de la sección 2.8.
+
+Cada variante declara qué planos deben reprobar, y se exige ese conjunto
+exacto. Así se detecta también un evaluador que reprueba de más.
+
+**D46. Congelación.** Operacionalización de las secciones 2.8 y 9.
+`--congelar` corre las pruebas sintéticas. Si todas salieron como se
+esperaba, escribe `reports/congelacion.json` con:
+- las huellas por componente (D14);
+- el SHA-256 del archivo;
+- los modelos;
+- las versiones instaladas;
+- el resultado de cada prueba.
+
+Si alguna prueba falla, no congela. La huella del archivo cambia con
+cualquier edición, así que se congela una sola vez, con el código de la
+campaña terminado. La campaña compara después las huellas por componente.
+
+---
+
 ## Pendientes
 
+- **Proveedor del modelo.** Las keys de pago no están disponibles. Si se
+  cambia a un proveedor con plan gratuito, la decisión reemplaza a D22 y debe
+  registrarse antes de congelar.
 - **Prueba con modelos reales** (cierre del Bloque 3). Falta una consulta de
-  desarrollo y un bloqueo con gpt-4.1-mini, y comprobar los dos modelos con
-  `--verificar`. Requiere las dos keys.
-- **Evaluador y juez** (Bloque 4). Hay que fijar cómo se cuentan las cifras
-  sin respaldo en el texto libre (secciones 2.8 y 5.2) y cómo se normalizan
-  los argumentos observados (D15 y D17).
+  desarrollo y un bloqueo con modelos reales, y comprobar ambos con
+  `--verificar`.
+- **Congelación** (D46). Se hace cuando estén decididos los modelos y
+  terminado el código de la campaña (Bloque 5).

@@ -1,8 +1,9 @@
 # Registro de pruebas
 
 Lo que se verificó en cada bloque, con qué resultado y qué se aprendió. Las
-pruebas de infraestructura aparecen separadas de las ejecuciones del sistema:
-estas, que son las que usan el modelo, todavía no existen.
+pruebas de infraestructura y las pruebas sintéticas del evaluador aparecen
+separadas de las ejecuciones del sistema: estas, que son las que usan el
+modelo, todavía no existen.
 
 ---
 
@@ -205,3 +206,94 @@ pasaron a líneas propias, el cargador ignora los de final de línea y
 - [ ] `--verificar` con las dos keys.
 - [ ] Un caso de desarrollo y un bloqueo con gpt-4.1-mini, con entradas
       distintas de R1–R6 para no ajustar los prompts a la clave.
+
+---
+
+## Bloque 4 · 27 de octubre de 2026
+
+**Qué se construyó.** La sección 7 del ejecutable:
+- comparación de trayectorias con un comparador para los tres criterios,
+  dependencias, reintentos de R4, cobertura y precisión;
+- comprobación de las acciones prohibidas;
+- comparación del resultado (exacta, por tolerancia y con cifras sin
+  respaldo);
+- llamada al juez J1/J2 con validación del veredicto;
+- veredicto por ejecución y primer paso divergente;
+- las pruebas sintéticas y la congelación.
+
+Las reglas están en D36–D46.
+
+**Pruebas sintéticas del evaluador** (`--probar-evaluador`). Son 23 trazas
+producidas por el sistema real con agentes de guion:
+- una referencia por ruta, que debe aprobar;
+- un reintento permitido en R4;
+- 16 defectos plantados.
+
+Cada prueba declara qué planos deben reprobar, y se exige ese conjunto
+exacto. Estas trazas son sintéticas, no ejecuciones del sistema (sección
+2.8).
+
+| Ruta | Prueba | Debe reprobar |
+|---|---|---|
+| R1 | paso extra en una ruta exacta | trayectoria |
+| R1 | el juez reprueba C3 | resultado |
+| R2 | herramienta omitida (calcular_indicadores) | trayectoria y resultado |
+| R2 | el juez responde en prosa | nada: no_completada |
+| R3 | cifra incorrecta (total $105,000) | resultado |
+| R3 | orden invertido (exposición antes que precio) | trayectoria |
+| R4 | dos reintentos | trayectoria |
+| R4 | precio 0 en lugar de null | resultado |
+| R4 | precio inventado en el texto | resultado |
+| R4 | cálculo tras PRICE_UNAVAILABLE | control |
+| R5 | argumento equivocado (corte del día anterior) | trayectoria |
+| R5 | validación omitida | trayectoria y resultado |
+| R5 | `false` reportado como 0 | resultado |
+| R5 | validación posterior a una acción prohibida | control |
+| R5 | cantidad reducida a 200 para que cumpla | los tres |
+| R6 | P1 modificado durante el caso | control |
+
+Resultado final: 23/23 como se esperaba.
+
+**Pruebas deterministas.** `pytest`: 229 aprobadas. `ruff` sin
+observaciones. `test_evaluador.py` añade las pruebas sintéticas, la
+normalización, las métricas, el primer paso divergente, el tipo exacto de
+null, cero y falso, las cifras sin respaldo y la validación del veredicto del
+juez. También cubre su reintento y la congelación.
+
+**`--congelar`** probado en una copia del repo: escribe las siete huellas,
+el SHA-256 del archivo, las versiones y el resultado de las 23 pruebas. En el
+repo no se congeló todavía, porque faltan los modelos y el código de la
+campaña (D46).
+
+### Lo que se aprendió
+
+**El evaluador encontró un error en la prueba que lo evaluaba.** En la
+primera corrida, dos pruebas de R6 reprobaron por una «cifra sin respaldo»:
+un 40. El guion de A4 para R6 reutilizaba el motivo de R5, «40% frente a un
+límite de 30%», pero en R6 XYZ pesa 15%. Ninguna herramienta había devuelto
+ese 40. El error era del guion, no del evaluador: es exactamente el tipo de
+texto que la comprobación debe atrapar.
+
+**Una prueba que asumía mal la numeración.** Una prueba esperaba que la
+delegación y la herramienta fueran los eventos 1 y 2. `seq` numera toda la
+traza, incluidos los controles y las llamadas al modelo, así que eran el 3 y
+el 5. El evaluador estaba bien; se corrigió la prueba.
+
+**Prueba de mutaciones.** Se rompieron cinco reglas del evaluador en copias
+del archivo, y cada copia se corrió desde su propia carpeta (lección del
+Bloque 2):
+
+| Mutación | `--probar-evaluador` | `test_evaluador.py` |
+|---|---|---|
+| no se revisan dependencias | 21/22 | 3 fallan |
+| `false` es igual a 0 | **22/22** | 1 falla |
+| nunca hay cifras sin respaldo | 21/22 | 3 fallan |
+| no se buscan herramientas no autorizadas | 21/22 | 3 fallan |
+| la ruta exacta admite pasos extra | 21/22 | 2 fallan |
+| copia sin mutar | 22/22 | todas pasan |
+
+La segunda mutación pasaba las pruebas sintéticas, que son el control que se
+corre antes de congelar. Solo la atrapaba una prueba unitaria. Se agregó la
+prueba sintética `anular_como_cero`, y con ella la mutación da 22/23. Es la
+misma falla que apareció en el Bloque 1 con la serialización de
+`aprobacion_puede_anular`.
