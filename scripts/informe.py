@@ -524,12 +524,30 @@ ninguna.
 
 \section{{El sistema}}
 
-Son cinco agentes dentro de un grafo de control de LangGraph. El supervisor, A0,
-usa a A1, A2 y A3 como herramientas: les pasa una tarea y recibe su respuesta
-estructurada. Si A0 propone una operación, el grafo siempre consulta a A4 y luego
-valida la propuesta en código, donde ninguna aprobación puede anular un límite
-duro. Toda llamada a herramienta pasa por la Mesa, que revisa permisos, descuenta
-presupuesto y deja traza. No hay forma de ejecutar operaciones.
+Es un sistema de tipo \textbf{{supervisor con agentes como herramientas, dentro de un
+grafo de control determinista}}. Antes de programarlo comparé cuatro patrones:
+
+\begin{{itemize}}[nosep]
+\item \textbf{{Supervisor}}, la base: un agente central decide qué especialistas
+consultar y solo activa los que hacen falta.
+\item \textbf{{Grafo de control}}, alrededor del supervisor: impone los pasos que no
+pueden quedar a criterio de un modelo, como la revisión de riesgo y la validación.
+\item \textbf{{Paralelo}}: útil para consultas independientes, pero no lo usé en esta
+versión. Todo corre de uno en uno, y la traza queda en orden.
+\item \textbf{{Enjambre}}, descartado: que los agentes se pasen el control entre ellos
+agrega variación y ciclos que un comité de inversión no necesita.
+\end{{itemize}}
+
+Por eso las flechas del diagrama son tareas y respuestas, no traspasos de control.
+El supervisor, A0, no consulta datos ni calcula: llama a A1 (noticias), A2
+(finanzas) y A3 (portafolio) como si fueran herramientas, les pasa una tarea y
+recibe su respuesta estructurada. Cada especialista solo puede usar sus propias
+herramientas y empieza sin memoria en cada invocación. Si A0 propone una
+operación, el grafo siempre consulta a A4 (riesgo) y luego valida la propuesta en
+código, donde ninguna aprobación puede anular un límite duro. Toda llamada a
+herramienta pasa por la Mesa, que revisa permisos, descuenta presupuesto y deja
+traza. No hay forma de ejecutar operaciones: una propuesta válida queda pendiente
+de que una persona decida.
 
 \begin{{center}}\small
 \begin{{tabular}}{{llL{{9.2cm}}l}}
@@ -549,21 +567,28 @@ agente & papel & herramientas & salida \\
 al modelo y {limites.timeout_caso_s}~s. Versiones: {tex(", ".join(f"{k} {v}" for k, v in meta["versiones"].items()))};
 Python {tex(meta["python"])}.
 
-El diagrama está en la página siguiente y en
+El diagrama está en la página \pageref{{fig:diagrama}} y en
 \texttt{{reports/diagrama\_arquitectura.pdf}}.
 
 \begin{{figure}}[p]
 \centering
-\includegraphics[angle=90,height=0.93\textheight]{{{DIAGRAMA.as_posix()}}}
+\includegraphics[angle=90,height=0.9\textheight]{{{DIAGRAMA.as_posix()}}}
+\caption{{Arquitectura: supervisor con agentes como herramientas dentro del grafo de
+control.}}
+\label{{fig:diagrama}}
 \end{{figure}}
-\clearpage
 
 \section{{Cómo lo evalué}}
 
 \begin{{itemize}}
-\item \textbf{{Antes de correr}} dejé escritas en el código las rutas, con su
-trayectoria y su resultado esperados. Probé el evaluador con 23 trazas con
-defectos plantados y congelé el archivo (SHA-256
+\item \textbf{{La evaluación es a priori.}} La definí en el documento de plan antes de
+programar el sistema: cinco rutas, una por tipo de caso de la rúbrica, cada una
+con sus cinco campos (entrada, trayectoria esperada con argumentos, resultado
+esperado con tolerancia, criterio de trayectoria y criterio de resultado). Los
+esperados los calculé a mano con los datos ficticios, y los copié al código como
+una clave separada que ningún agente ve.
+\item \textbf{{Antes de correr}} probé el evaluador con 23 trazas con defectos
+plantados y congelé el archivo (SHA-256
 \texttt{{{tex(meta["archivo_sha256"][:16])}}}…); la campaña comprueba que no cambió.
 \item \textbf{{Cada ejecución se mide en tres planos}}: la trayectoria (qué agentes y
 herramientas, con qué argumentos y en qué orden), el resultado (exacto, con

@@ -1,6 +1,6 @@
 # Guion de la presentación
 
-Unos 6 minutos. Entre corchetes, lo que muestro en pantalla.
+Unos 8 minutos. Entre corchetes, lo que muestro en pantalla.
 
 ---
 
@@ -13,40 +13,89 @@ lo evalué.
 
 ---
 
-## El diagrama · 1.5 min
+## El tipo de sistema y el diagrama · 2.5 min
 
 [Diagrama]
 
-La idea es simple: **los modelos deciden e interpretan, pero el código
+Primero, qué tipo de sistema multiagente es, porque de eso depende todo lo
+demás. Usé un **supervisor con agentes como herramientas, dentro de un grafo
+de control determinista**.
+
+Antes de programar comparé cuatro patrones:
+
+- **Supervisor:** un agente central decide a quién consultar. Lo elegí como
+  base, porque centraliza la delegación y solo activa a los especialistas que
+  hacen falta.
+- **Grafo de control:** lo puse alrededor del supervisor, para imponer los
+  pasos que no pueden quedar a criterio de un modelo, como revisar el riesgo y
+  validar.
+- **Paralelo:** podría servir para consultas independientes, pero en esta
+  versión no lo usé. Todo corre de uno en uno, para que la traza sea clara.
+- **Enjambre**, donde los agentes se pasan el control entre ellos: lo
+  descarté. Ese traspaso libre agrega variación y ciclos que en un comité de
+  inversión no quiero.
+
+Por eso las flechas del diagrama son tareas y respuestas, no traspasos de
+control. El supervisor nunca le entrega el caso a otro agente: le pide algo,
+recibe el resultado y sigue decidiendo él.
+
+La idea que lo resume es: **los modelos deciden e interpretan, pero el código
 calcula y controla.**
 
-Arriba está el grafo de control. El camino de cada solicitud está fijado en
-código; ningún modelo lo puede cambiar.
+[Señalar la caja punteada]
 
-El supervisor, A0, recibe la pregunta y consulta a los especialistas como si
-fueran herramientas: A1 para noticias, A2 para finanzas y A3 para el
-portafolio. Cada uno solo puede usar sus propias herramientas.
+Arriba está el grafo. El camino de cada solicitud está fijado en código:
+iniciar, supervisor, clasificar la salida y, si hay propuesta, revisión de
+riesgo y validación. Ningún modelo puede saltarse un paso.
 
-Si A0 propone una compra, el grafo siempre la manda a A4, el de riesgo, y
-después la valida en código contra la política. Ninguna aprobación, ni la del
-usuario, puede saltarse un límite.
+[Señalar A0, A1, A2 y A3]
 
-Todas las llamadas pasan por la Mesa, que revisa permisos, lleva el
-presupuesto y guarda la traza que después evalúo. Los datos son ficticios y
-viven dentro del archivo.
+El supervisor, A0, recibe la pregunta y decide qué necesita. No consulta
+datos ni hace cálculos: llama a los especialistas como si fueran
+herramientas. A1 lee noticias, A2 analiza el reporte financiero y A3 trabaja
+con el portafolio. Cada uno solo puede usar sus propias herramientas, y cada
+vez que lo llaman empieza sin memoria, así que no arrastra nada de otra
+consulta.
 
-Y a la derecha está el control humano: si la propuesta cumple, el sistema no
-la ejecuta, queda para que una persona decida. Si no cumple, se bloquea. No
-existe forma de ejecutar una operación.
+[Señalar revisar_riesgo y verificar_control]
+
+Si A0 propone una compra, el grafo siempre la manda a A4, el de riesgo. Eso
+no lo decide A0: está en el código. Después viene la validación
+determinista, que recalcula los límites de la política. Ahí ninguna
+aprobación, ni la del usuario ni la de un modelo, puede saltarse un límite.
+Si A4 encuentra un problema, puede devolver el caso al supervisor, como
+máximo dos veces.
+
+[Señalar la Mesa y los datos]
+
+Todas las llamadas a herramientas pasan por la Mesa, que revisa permisos,
+lleva el presupuesto de cada caso y guarda la traza que después evalúo. Los
+datos son ficticios y viven dentro del archivo, para que la evaluación no
+dependa del mercado del día.
+
+[Señalar el recuadro verde]
+
+Y a la derecha está el control humano. Si la propuesta cumple, el sistema no
+la ejecuta: queda pendiente para que una persona decida. Si no cumple, se
+bloquea. No existe ninguna herramienta para ejecutar operaciones.
 
 ---
 
-## Cómo lo evalué · 1.5 min
+## Cómo lo evalué · 2 min
 
 [Tabla de rutas del informe]
 
-Antes de correr nada, escribí en el código cinco casos de prueba, uno por
-cada tipo que pide la rúbrica:
+La evaluación la definí **antes de programar el sistema**: en el documento
+de plan quedó una evaluación a priori. Cada caso tiene sus cinco campos: la
+entrada tal como la escribe el usuario, la trayectoria esperada con sus
+argumentos, el resultado esperado con su tolerancia, y cómo se compara cada
+uno. Esos valores no salen de lo que respondió el sistema: los calculé a
+mano a partir de los datos ficticios.
+
+Después los copié al código como una clave de respuestas, separada de los
+agentes. Ningún agente la ve: ni en su prompt ni en sus herramientas.
+
+Son cinco casos, uno por cada tipo que pide la rúbrica:
 
 - **R1:** explicar una noticia.
 - **R2:** cruzar una noticia con el reporte financiero, con dos agentes.
@@ -57,10 +106,18 @@ cada tipo que pide la rúbrica:
 
 Y uno extra, R6: una compra válida que debe quedar esperando a una persona.
 
-En cada caso comparo por separado el camino y la respuesta. En el camino,
-qué agentes y herramientas usó y con qué argumentos. En la respuesta, cifras
-con tolerancia, estados exactos y, en R1 y R2, que son texto libre, un juez
-LLM con tres criterios.
+En cada caso comparo por separado el camino y la respuesta.
+
+En el camino reviso qué agentes y herramientas usó, con qué argumentos y en
+qué orden. El criterio depende del caso: en R1 exige coincidencia exacta,
+porque una sola herramienta basta y cualquier paso extra sobra. En R2 acepta
+cualquier orden, porque noticias y finanzas son independientes. En los demás
+exige orden, porque hay datos que dependen de otros: primero el precio,
+después el cálculo.
+
+En la respuesta, las cifras se comparan con tolerancia de un centavo y los
+estados tienen que ser exactos. En R1 y R2, que son texto libre, uso un juez
+LLM con tres criterios escritos de antemano.
 
 Antes de probar el sistema probé el evaluador: le di 23 trazas con errores
 plantados y comprobé que los detectara todos. Después congelé el archivo y
