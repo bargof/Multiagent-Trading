@@ -5,7 +5,7 @@ el diseño, pero implementarlo obliga a precisar detalles que el documento no
 fija, y en dos casos a cambiar una decisión (D22, que luego reemplaza D47).
 Las decisiones D36 a D46, del Bloque 4, fijan cómo el evaluador compara
 trayectorias y resultados. D47 a D50 cambian el proveedor a Gemini, por su
-capa gratuita. D51 a D54, del Bloque 5, fijan cómo se corre la campaña y qué
+capa gratuita. D51 a D55, del Bloque 5, fijan cómo se corre la campaña y qué
 cuenta en ella. Todas se registran **antes**
 de ejecutar cualquier ruta de la campaña, para que ninguna se pueda leer como
 un ajuste hecho después de ver resultados. Cuando una decisión de esta
@@ -634,14 +634,14 @@ fija antes de correr para que no pueda usarse para escoger ejecuciones
     corre la campaña la detuvo con Ctrl+C. Se conserva con su traza, no
     cuenta y su lugar del plan se repite.
 - *Cuota agotada* quiere decir que el caso se cerró con `MODEL_UNAVAILABLE` y
-  el error que agotó el único reintento fue un 429. Un 503, un timeout o un
-  corte de red no son cuota: esa ejecución cuenta, porque D30 los trata como
-  fallas del proveedor que el sistema debe manejar.
+  el error que agotó el único reintento fue un 429. *Cambiado por D55:* un
+  503, un timeout o un corte de red reciben el mismo trato.
 - *Una acción prohibida antes del corte cuenta.* Es un fallo demostrado: si la
   hubo, la ejecución cuenta como fallida aunque la cuota no la dejara
   terminar.
 - *Si el juez se queda sin cuota*, el juicio queda sin completar (sección
-  6.2): la ejecución cuenta como `no_completada` y no se repite.
+  6.2): la ejecución cuenta como `no_completada` y no se repite. D55 extiende
+  la regla a cualquier falta de respuesta del juez.
 - *La campaña se detiene* tras una interrumpida, un error o un juez sin cuota.
   Seguir sin cuota solo produciría casos cortados, y tras una excepción no se
   sabe si se repetiría.
@@ -713,6 +713,31 @@ de las secciones 2.8 y 6.3.
     completar no es una falla del sistema: se anota su motivo y nada más.
 - *`--tabla`* imprime la tabla de una campaña guardada sin escribir nada ni
   llamar a los modelos.
+
+**D55. Un modelo que no responde interrumpe la ejecución, sea por cuota o
+por saturación.** Nueva; cambia D52.
+- *Motivo.* El 27 de octubre, `--verificar` recibió de Google un 503 «high
+  demand», antes de correr ninguna ruta de la campaña. Con D52, una
+  saturación así habría contado cada ejecución de esa ventana como fallida, y
+  la campaña habría seguido gastando cuota. El resultado habría medido la
+  carga de Google, no al sistema.
+- *Regla.* Si el modelo de los agentes no responde ni al único reintento, la
+  ejecución queda interrumpida. Da igual que sea por un 429 de cuota, un 503
+  de saturación, un timeout o un corte de red: se conserva, no cuenta, la
+  campaña se detiene y su lugar se repite al seguir. La traza distingue cuál
+  fue.
+- *Se mantiene de D52:*
+  - una acción prohibida antes del corte cuenta como fallida;
+  - un juez que no responde deja el juicio sin completar, y la campaña se
+    detiene;
+  - una excepción cuenta como error.
+- *Qué sigue probando que el sistema maneja la caída.* Que el caso se cierre
+  en `error_controlado` con `MODEL_UNAVAILABLE` sin liberar nada (D30) se
+  prueba con modelos de guion y con el cliente falso de Gemini. En la campaña
+  lo muestra el registro de cada interrumpida.
+- *`--verificar`* ya no presenta un 503 o un 429 como rechazo de los
+  esquemas. Dice que la petición no llegó a probarse y si es cuota o algo
+  temporal.
 
 ---
 

@@ -16,7 +16,8 @@ Uso:
     python proyecto_multiagente.py --tabla              # la última campaña
 
 Sin opciones corre la campaña: R1–R5 tres veces y R6 tres veces aparte. Si
-la cuota la corta, volver a correrlo con el mismo código la sigue donde quedó.
+la cuota o la saturación del modelo la cortan, volver a correrlo con el mismo
+código la sigue donde quedó.
 
 Configuración obligatoria: una variable de entorno, GOOGLE_API_KEY, con una
 key de Google AI Studio, o un archivo .env junto a este script (ver
@@ -3000,8 +3001,8 @@ class _Supervision(AgentMiddleware):
                         "status": "error",
                         "intento": intento + 1,
                         "error": repr(error),
-                        # Un 429: la campaña distingue la cuota agotada de un
-                        # modelo que no responde (decisión D52).
+                        # Un 429 es cuota y un 503, saturación. La campaña los
+                        # trata igual (D55); la traza los distingue.
                         "cuota_agotada": isinstance(error, ModelRateLimitError),
                     },
                     invocacion=self.invocacion,
@@ -3957,8 +3958,8 @@ class Juicio(_Registro):
     veredicto: VeredictoJuez | None = None
     error: str | None = None
     reintentos: int = 0
-    # El juicio no se completó por un 429: la campaña se detiene (D52).
-    cuota_agotada: bool = False
+    # El proveedor no respondió ni al reintento: la campaña se detiene (D55).
+    proveedor_no_respondio: bool = False
     tokens: dict[str, int] = Field(default_factory=dict)
 
     @property
@@ -4472,7 +4473,7 @@ def juzgar(juez_id: str, resultado: ResultadoCaso, modelo: BaseChatModel) -> Jui
         except _TRANSITORIOS as error:
             if intento == LIMITES.reintentos_transporte:
                 juicio.error = f"El juez no respondió: {type(error).__name__}."
-                juicio.cuota_agotada = isinstance(error, ModelRateLimitError)
+                juicio.proveedor_no_respondio = True
                 return juicio
             juicio.reintentos += 1
             pausar_antes_de_reintentar()
@@ -5425,6 +5426,21 @@ def _uso(mensaje: AIMessage) -> str:
     return f"{uso.get('input_tokens', '?')}+{uso.get('output_tokens', '?')} tokens"
 
 
+def _sin_respuesta(error: Exception) -> None:
+    """Un 429 o un 503 no dicen nada de los esquemas ni de la key: no se probó."""
+    cuota = isinstance(error, ModelRateLimitError)
+    print(
+        f"  [X] Google no respondió: {error}\n"
+        + (
+            "      Es cuota (429): revisa tus límites en AI Studio."
+            if cuota
+            else "      Es temporal (modelo saturado, timeout o red): vuelve a "
+            "correr --verificar más tarde."
+        )
+        + "\n      La petición no llegó a probarse."
+    )
+
+
 def _probar_agentes(llm: BaseChatModel) -> bool:
     """Una sola llamada con todos los esquemas del sistema y la herramienta eco.
 
@@ -5443,7 +5459,10 @@ def _probar_agentes(llm: BaseChatModel) -> bool:
         llamada = llm.bind_tools([*esquemas, eco]).invoke(
             "Usa la herramienta eco con texto='hola'."
         )
-    except (ModelError, ChatGoogleGenerativeAIError, httpx.TransportError) as error:
+    except _TRANSITORIOS as error:
+        _sin_respuesta(error)
+        return False
+    except (ModelError, ChatGoogleGenerativeAIError) as error:
         print(f"  [X] rechazó la petición con los esquemas del sistema: {error}")
         return False
     usa_eco = any(
@@ -5461,7 +5480,10 @@ def _probar_juez(llm: BaseChatModel) -> bool:
     """Una llamada de texto sin herramientas, como las del juez."""
     try:
         respuesta = llm.invoke("Responde únicamente con la palabra: ok")
-    except (ModelError, ChatGoogleGenerativeAIError, httpx.TransportError) as error:
+    except _TRANSITORIOS as error:
+        _sin_respuesta(error)
+        return False
+    except (ModelError, ChatGoogleGenerativeAIError) as error:
         print(f"  [X] rechazó la llamada de texto: {error}")
         return False
     texto = respuesta.text.strip()
@@ -5555,9 +5577,9 @@ def imprimir_caso(resultado: ResultadoCaso) -> None:
 #   resultados.json    las tablas, recalculadas desde ejecuciones.jsonl
 #   revision.md        la plantilla de la revisión humana (sección 6.3)
 #
-# Si la cuota se acaba a mitad de campaña, la campaña se detiene. Al volver a
-# correr el archivo con el mismo código, sigue donde quedó sin repetir
-# ninguna ejecución terminada (decisión D52).
+# Si la cuota se acaba o el modelo no responde, la campaña se detiene. Al
+# volver a correr el archivo con el mismo código, sigue donde quedó sin
+# repetir ninguna ejecución terminada (decisiones D52 y D55).
 
 DIR_CAMPANAS = Path(__file__).with_name("reports") / "campanas"
 RUTA_POR_ID = {r.ruta_id: r for r in RUTAS}
@@ -5620,8 +5642,9 @@ class Ejecucion(_Registro):
     - evaluada: el sistema respondió y el evaluador dio su veredicto.
     - error: una excepción escapó del sistema. Cuenta como no aprobada y no
       se repite.
-    - interrumpida: se acabó la cuota de los agentes, o quien corre la
-      campaña la detuvo. Se conserva, no cuenta y se repite.
+    - interrumpida: el modelo de los agentes no respondió ni al reintento
+      (cuota, saturación, timeout o red), o quien corre la campaña la detuvo.
+      Se conserva, no cuenta y se repite (D55).
     """
 
     ejecucion: str  # ruta.repetición, p. ej. "R1.2"
@@ -5638,7 +5661,7 @@ class Ejecucion(_Registro):
     tokens: dict[str, int]
     trayectoria_obtenida: list[str]
     respuesta: dict[str, Any] | None = None
-    # En una interrumpida por cuota es la evaluación de lo que alcanzó a pasar.
+    # En una interrumpida por el modelo, la evaluación de lo que alcanzó a pasar.
     evaluacion: Evaluacion | None = None
 
     @property
@@ -5656,9 +5679,9 @@ def trayectoria_obtenida(traza: Traza) -> list[str]:
     ]
 
 
-def _cuota_agotada(resultado: ResultadoCaso) -> str | None:
-    """El error del 429, si el caso se cerró porque la cuota negó la última
-    llamada de un agente."""
+def _sin_respuesta_del_modelo(resultado: ResultadoCaso) -> str | None:
+    """El último error, si el caso se cerró porque el modelo de los agentes
+    no respondió ni al reintento: cuota (429), saturación (503), timeout o red."""
     if resultado.respuesta.error != CodigoError.MODEL_UNAVAILABLE:
         return None
     reintentos = [
@@ -5666,9 +5689,9 @@ def _cuota_agotada(resultado: ResultadoCaso) -> str | None:
         for e in resultado.traza.de_clase(ClaseEvento.CONTROL)
         if e.nombre == "reintento_transporte"
     ]
-    if reintentos and reintentos[-1].resultado.get("cuota_agotada"):
-        return str(reintentos[-1].resultado.get("error"))[:300]
-    return None
+    if not reintentos:
+        return None
+    return str(reintentos[-1].resultado.get("error"))[:300]
 
 
 def correr_ejecucion(
@@ -5704,10 +5727,10 @@ def correr_ejecucion(
         detalle = "".join(traceback.format_exception(error, limit=-12, chain=False))
         parcial = getattr(error, "caso_parcial", None)
     else:
-        if cuota := _cuota_agotada(resultado):
-            motivo = f"Se acabó la cuota del modelo de los agentes: {cuota}"
+        if falla := _sin_respuesta_del_modelo(resultado):
+            motivo = f"El modelo de los agentes no respondió: {falla}"
             # Una acción prohibida antes del corte es un fallo demostrado:
-            # cuenta aunque la cuota no haya dejado terminar el caso.
+            # cuenta aunque el modelo no haya dejado terminar el caso.
             if not evaluacion.prohibidas:
                 estado = "interrumpida"
 
@@ -5733,16 +5756,17 @@ def correr_ejecucion(
 
 
 def motivo_para_detenerse(ejecucion: Ejecucion) -> str | None:
-    """Seguir sin cuota solo produciría casos cortados. Tras una excepción,
-    no se sabe si se repetiría: se para antes de gastar más (D52)."""
+    """Seguir sin cuota o con el modelo saturado solo produciría casos
+    cortados. Tras una excepción, no se sabe si se repetiría: se para antes de
+    gastar más (D52 y D55)."""
     if ejecucion.estado == "error":
         return f"Una excepción escapó del sistema: {ejecucion.motivo}"
-    # Interrumpida, o cortada por la cuota después de una acción prohibida.
+    # Interrumpida, o cortada por el modelo después de una acción prohibida.
     if ejecucion.motivo:
         return ejecucion.motivo
     juicio = ejecucion.evaluacion.resultado.juicio
-    if juicio is not None and juicio.cuota_agotada:
-        return "Se acabó la cuota del modelo juez."
+    if juicio is not None and juicio.proveedor_no_respondio:
+        return "El modelo juez no respondió ni al reintento."
     return None
 
 
@@ -6336,10 +6360,11 @@ def correr_campana(
         return 0
     if parada:
         print(f"\n  Campaña detenida. {parada}")
-    if parada and "cuota" in parada:
+    if parada and "no respondió" in parada:
         print(
-            "  Si el 429 fue por minuto, baja GEMINI_RPM; si fue el límite diario, "
-            "espera a que se renueve."
+            "  Un 429 es cuota: si fue por minuto, baja GEMINI_RPM; si fue el "
+            "límite diario,\n  espera a que se renueve. Un 503 es saturación del "
+            "modelo: vuelve a intentar más tarde."
         )
     print(
         f"\n  Quedan {len(resumen['pendientes'])} ejecuciones. Al volver a correr el "

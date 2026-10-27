@@ -524,10 +524,21 @@ largo de las rutas. La prueba busca el marco que lanzó la excepción.
 - `ruff check` y `ruff format --check`: limpios.
 - `--probar-evaluador`: 23/23.
 
+**Primer `--verificar` con la key (27 de octubre).** Google respondió 503
+«high demand»: el modelo estaba saturado y la petición no llegó a probarse.
+Hasta entonces, un 503 que durara también el reintento contaba la ejecución
+como fallida y la campaña seguía. Se cambió antes de correr ninguna ruta
+(D55): ahora interrumpe la ejecución, igual que la cuota. Pruebas nuevas:
+- un 503 de Google a los agentes interrumpe y detiene la campaña;
+- un 429 o un 503 al juez deja el juicio sin completar y la detiene;
+- `--verificar` distingue la cuota de una saturación y no reintenta.
+
+`pytest`: 279 pasan.
+
 ### Pendiente, con la key
 
-- [ ] `--verificar`, que gasta dos llamadas.
-- [ ] Una consulta de desarrollo con entradas distintas de R1–R6.
+- [ ] `--verificar`, que gasta dos llamadas: repetirlo cuando el modelo no
+  esté saturado.
 - [ ] Ver en AI Studio el límite diario de cada modelo.
 - [ ] `--congelar`, con el código final.
 - [ ] La campaña: `python proyecto_multiagente.py`, las veces que haga falta.

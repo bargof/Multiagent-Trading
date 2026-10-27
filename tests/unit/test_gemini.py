@@ -240,6 +240,19 @@ def test_verificar_avisa_si_el_modelo_no_existe(capsys):
     assert "no está disponible" in capsys.readouterr().out
 
 
+def test_verificar_no_confunde_un_503_con_un_rechazo(capsys):
+    """Un modelo saturado no dice nada de los esquemas: hay que reintentar."""
+    saturado = gemini(MODELO_AGENTES, [_error(503, "UNAVAILABLE")])
+    assert not _probar_agentes(saturado)
+    salida = capsys.readouterr().out
+    assert "Es temporal" in salida and "rechazó" not in salida
+    juez = gemini(MODELO_JUEZ, [_error(429, "RESOURCE_EXHAUSTED")])
+    assert not _probar_juez(juez)
+    assert "Es cuota (429)" in capsys.readouterr().out
+    # Sin reintentos: cada prueba gastó una sola petición.
+    assert len(saturado.client.peticiones) == len(juez.client.peticiones) == 1
+
+
 def test_sin_key_verificar_no_construye_modelos(capsys):
     assert not verificar_entorno(Configuracion.desde_entorno())
     assert "Falta GOOGLE_API_KEY" in capsys.readouterr().out

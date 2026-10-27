@@ -186,7 +186,7 @@ def test_la_cuota_agotada_detiene_y_la_campana_sigue_donde_quedo(capsys):
         ("R3.1", "interrumpida"),
     ]
     salida = capsys.readouterr().out
-    assert "Se acabó la cuota del modelo de los agentes" in salida
+    assert "El modelo de los agentes no respondió" in salida
     assert "baja GEMINI_RPM" in salida
 
     llamadas = []
@@ -225,7 +225,7 @@ def test_sin_cuota_del_juez_el_juicio_queda_sin_completar_y_se_detiene():
     assert correr(de_referencia({"R1.1": (None, juez)})) == 2
     (r11,) = por_lugar(unica())["R1.1"]
     assert r11.estado == "evaluada" and r11.veredicto == "no_completada"
-    assert r11.evaluacion.resultado.juicio.cuota_agotada
+    assert r11.evaluacion.resultado.juicio.proveedor_no_respondio
 
     assert correr() == 0
     revision = (unica().carpeta / "revision.md").read_text("utf-8")
@@ -419,20 +419,26 @@ def test_un_429_de_google_se_reconoce_como_cuota():
         assert "AIza" not in archivo.read_text("utf-8"), archivo.name
 
 
-def test_un_429_de_google_al_juez_se_reconoce_como_cuota():
-    cuota = [error_de_google(429, "RESOURCE_EXHAUSTED")] * 2
-    assert correr(_por_gemini(juez_contesta=cuota)) == 2
+@pytest.mark.parametrize(
+    "codigo,estado", [(429, "RESOURCE_EXHAUSTED"), (503, "UNAVAILABLE")]
+)
+def test_si_google_no_responde_al_juez_se_detiene(codigo, estado):
+    sin_respuesta = [error_de_google(codigo, estado)] * 2
+    assert correr(_por_gemini(juez_contesta=sin_respuesta)) == 2
     (r11,) = unica().ejecuciones()
     assert r11.veredicto == "no_completada"
-    assert r11.evaluacion.resultado.juicio.cuota_agotada
+    assert r11.evaluacion.resultado.juicio.proveedor_no_respondio
 
 
-def test_un_503_no_es_cuota_y_la_ejecucion_cuenta():
-    caido = [error_de_google(503, "UNAVAILABLE")] * 2
-    correr(_por_gemini(cambiar_a1=caido), maximo=1)
+def test_un_503_de_google_interrumpe_como_la_cuota(capsys):
+    """Decisión D55: un modelo saturado no mide al sistema. Se conserva, no
+    cuenta, la campaña se detiene y al seguir se repite."""
+    saturado = [error_de_google(503, "UNAVAILABLE")] * 2
+    assert correr(_por_gemini(cambiar_a1=saturado)) == 2
     (r11,) = unica().ejecuciones()
-    assert r11.estado == "evaluada" and r11.veredicto == "fallida"
+    assert r11.estado == "interrumpida" and "UNAVAILABLE" in r11.motivo
     assert r11.respuesta["error"] == CodigoError.MODEL_UNAVAILABLE
+    assert "Un 503 es saturación" in capsys.readouterr().out
 
 
 def test_la_traza_guarda_la_version_y_el_fin_de_cada_turno():
