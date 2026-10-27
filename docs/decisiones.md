@@ -5,8 +5,8 @@ el diseño, pero implementarlo obliga a precisar detalles que el documento no
 fija, y en dos casos a cambiar una decisión (D22, que luego reemplaza D47).
 Las decisiones D36 a D46, del Bloque 4, fijan cómo el evaluador compara
 trayectorias y resultados. D47 a D50 cambian el proveedor a Gemini, por su
-capa gratuita. D51 a D55, del Bloque 5, fijan cómo se corre la campaña y qué
-cuenta en ella. Todas se registran **antes**
+capa gratuita. D51 a D56, del Bloque 5, fijan cómo se corre la campaña, qué
+cuenta en ella y el modelo juez definitivo. Todas se registran **antes**
 de ejecutar cualquier ruta de la campaña, para que ninguna se pueda leer como
 un ajuste hecho después de ver resultados. Cuando una decisión de esta
 sección contradice una anterior del documento, prevalece la de esta sección.
@@ -503,7 +503,8 @@ campaña terminado. La campaña compara después las huellas por componente.
 
 **D47. Gemini para agentes y juez.** Nueva; reemplaza a D22 y cambia la
 sección 3.1. Los agentes usan gemini-3.6-flash (`MODEL_NAME`). El juez usa
-gemini-3.8-flash (`JUDGE_MODEL`).
+gemini-3.8-flash (`JUDGE_MODEL`). *El juez cambia a gemini-3.5-flash-lite por
+D56.*
 
 - *Motivo.* No hay keys de pago. Gemini tiene una capa gratuita con una sola
   key de Google AI Studio, y sus modelos Flash llaman herramientas y entregan
@@ -738,6 +739,31 @@ por saturación.** Nueva; cambia D52.
 - *`--verificar`* ya no presenta un 503 o un 429 como rechazo de los
   esquemas. Dice que la petición no llegó a probarse y si es cuota o algo
   temporal.
+
+**D56. El juez pasa a gemini-3.5-flash-lite.** Nueva; cambia el modelo juez
+de D47.
+- *Motivo.* El 27 de octubre, gemini-3.8-flash no respondió en ninguna
+  verificación: un 503 «high demand» y luego un 504 `DEADLINE_EXCEEDED`. En
+  esa misma verificación, gemini-3.6-flash, el de los agentes, aceptó los 19
+  esquemas y llamó la herramienta. La sección 6.2 cuenta un juez que no
+  responde como evaluación no completada, sin repetirla: un juez inestable
+  dejaría R1 y R2 sin juzgar. Se cambió antes de congelar y antes de correr
+  ninguna ruta.
+- *Por qué este modelo.*
+  - Es otro modelo que el de los agentes, así que se conserva lo que D47
+    lograba: el juez no califica salidas de su mismo modelo.
+  - langchain-google-genai 4.4.2 lo trata igual que a gemini-3.6-flash: sin
+    temperatura y con el nivel de razonamiento `medium` disponible. D48 no
+    cambia.
+  - El juez solo hace llamadas de texto, así que no le afecta lo de las
+    respuestas de función de D47.
+- *Límite.* Es un modelo Lite: más chico que el de los agentes. Los
+  criterios de J1 y J2 son binarios y explícitos, pero un juez más chico
+  puede equivocarse más. La revisión humana de R1 y R2 (sección 6.3,
+  `revision.md`) se vuelve más importante, y el informe debe discutirlo.
+- *Pruebas.* Con 3.8, la mutación `temperature=0` solo la atrapaba la prueba
+  del juez. 3.5 Flash Lite también la quita con un aviso, así que ningún
+  modelo del sistema la enviaría.
 
 ---
 

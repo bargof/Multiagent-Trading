@@ -115,10 +115,11 @@ VERSIONES_FIJADAS = {
 
 # Un solo proveedor, Gemini, por su capa gratuita (decisión D47, que
 # reemplaza a D22). Los agentes usan 3.6 Flash, que langchain-google-genai
-# 4.4.2 trata de forma explícita. El juez usa 3.8 Flash: comparte proveedor
-# con los agentes, pero no califica salidas de su mismo modelo.
+# 4.4.2 trata de forma explícita. El juez usa 3.5 Flash Lite: comparte
+# proveedor con los agentes, pero no califica salidas de su mismo modelo. Era
+# 3.8 Flash, que no respondió en ninguna verificación (decisión D56).
 MODELO_AGENTES = "gemini-3.6-flash"
-MODELO_JUEZ = "gemini-3.8-flash"
+MODELO_JUEZ = "gemini-3.5-flash-lite"
 # Gemini 3.6 en adelante ya no admite temperature, y la sección 3.1 pide 0
 # «cuando el modelo la admita»: no se envía (decisión D48).
 TEMPERATURA = None

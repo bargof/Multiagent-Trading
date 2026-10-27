@@ -533,12 +533,20 @@ como fallida y la campaña seguía. Se cambió antes de correr ninguna ruta
 - un 429 o un 503 al juez deja el juicio sin completar y la detiene;
 - `--verificar` distingue la cuota de una saturación y no reintenta.
 
+**Segundo `--verificar` (27 de octubre).**
+- gemini-3.6-flash, el de los agentes, aceptó los 19 esquemas y llamó la
+  herramienta eco, con 2972 tokens de entrada y 73 de salida. La key, el
+  modelo y los esquemas del sistema quedan comprobados con la API real.
+- gemini-3.8-flash, el juez, devolvió 504 `DEADLINE_EXCEEDED`.
+
+Con dos fallas seguidas del juez, se cambió a gemini-3.5-flash-lite antes de
+congelar (D56).
+
 `pytest`: 279 pasan.
 
 ### Pendiente, con la key
 
-- [ ] `--verificar`, que gasta dos llamadas: repetirlo cuando el modelo no
-  esté saturado.
+- [ ] `--verificar` con el juez nuevo, que gasta dos llamadas.
 - [ ] Ver en AI Studio el límite diario de cada modelo.
 - [ ] `--congelar`, con el código final.
 - [ ] La campaña: `python proyecto_multiagente.py`, las veces que haga falta.

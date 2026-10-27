@@ -33,7 +33,7 @@ campaña están probados con un cliente falso, sin red ni cuota.
 
 Hay una variable obligatoria, `GOOGLE_API_KEY`, con una key de la API de
 Gemini (decisión D47). La usan los agentes A0–A4 (gemini-3.6-flash) y el juez
-J1/J2 (gemini-3.8-flash). El juez es otro modelo para no calificar salidas
+J1/J2 (gemini-3.5-flash-lite). El juez es otro modelo para no calificar salidas
 del suyo, aunque comparte proveedor.
 
 La key se crea gratis en [Google AI Studio](https://aistudio.google.com/apikey)
