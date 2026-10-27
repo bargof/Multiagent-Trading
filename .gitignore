@@ -1,0 +1,9 @@
+.venv/
+__pycache__/
+*.py[cod]
+.ruff_cache/
+.pytest_cache/
+.env
+.DS_Store
+# El ZIP de entrega se genera; no se versiona.
+dist/

@@ -1,0 +1,36 @@
+[tool.poetry]
+name = "comite-inversion-multiagente"
+version = "0.1.0"
+description = "Comité de inversión multiagente: supervisor, grafo de control y evaluación de trayectorias"
+readme = "README.md"
+# El entregable es un solo archivo ejecutable, no un paquete instalable.
+package-mode = false
+
+# Mismas versiones que el comentario pip de proyecto_multiagente.py.
+[tool.poetry.dependencies]
+python = ">=3.11,<3.14"
+langchain = "1.4.7"
+langchain-openai = "1.7.3"
+langgraph = "1.2.18"
+openai = "3.39.0"
+pydantic = "2.14.1"
+
+[tool.poetry.group.dev.dependencies]
+pytest = ">=8.0"
+ruff = ">=0.5"
+
+[build-system]
+requires = ["poetry-core>=1.9.0"]
+build-backend = "poetry.core.masonry.api"
+
+[tool.ruff]
+line-length = 88
+target-version = "py311"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "N", "W", "UP"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]
+addopts = "-v --tb=short"
