@@ -813,6 +813,34 @@ Nueva; cambia los modelos de D47 y D56, y el ritmo de D50.
 
 ---
 
+## Bloque 6
+
+**D58. Los entregables se generan desde la campaña.** Operacionalización del
+Bloque 6 del plan y de la rúbrica («los números coinciden con lo que produce
+el archivo»).
+- *Informe* (`scripts/informe.py`).
+  - Todos sus números salen de `resultados.json` y `campana.json`. Los cinco
+    campos de cada ruta salen de la clave del ejecutable.
+  - No se genera si la huella de las expectativas no coincide con la de la
+    campaña.
+- *Análisis de fallas.* La causa probable y el efecto de cada falla están en
+  `analisis.json`, escrito después de la campaña a partir de su traza. No
+  cambia ningún veredicto.
+- *Revisión humana.* Se lee de `revision.md`; si no está registrada, el
+  informe lo dice.
+- *Diagrama* (`scripts/diagrama.py`). Toma herramientas, delegaciones,
+  salidas, límites y modelos del código, y falla si los agentes cambian.
+- *ZIP* (`scripts/empacar.py`). Excluye `.env`, el entorno virtual y la
+  compilación, y no se escribe si algún archivo contiene algo con forma de
+  key de Google.
+- *El falso positivo de R4.1 y R4.2 no se corrige en esta campaña.* El
+  detector de cifras partió el corte citado `…-06:00` y marcó el `06`. El
+  veredicto oficial se mantiene, 9 de 15, y el informe lo explica. Corregir
+  el detector cambia el archivo y exige una campaña nueva (Bloque 5 del
+  plan).
+
+---
+
 ## Pendientes
 
 - **Prueba con modelos reales** (cierre del Bloque 3). Para cuidar la cuota,
@@ -821,6 +849,5 @@ Nueva; cambia los modelos de D47 y D56, y el ritmo de D50.
 - **Cuota diaria.** Hay que ver en AI Studio el límite diario de cada modelo.
   Si no alcanza para la campaña, esta se detiene al agotarse y sigue otro día
   (D52). Con `--ejecuciones` se puede repartir de antemano.
-- **Congelación** (D46). El código de la campaña ya está terminado. El orden
-  es: `--verificar`, la consulta de desarrollo, `--congelar` y la campaña. Si
-  la consulta obliga a cambiar el código, se congela después del cambio.
+- **Revisión humana** (sección 6.3). Se registra en `revision.md` de la
+  campaña 20261027-145758; después se regeneran el informe y el ZIP.

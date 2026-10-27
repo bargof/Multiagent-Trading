@@ -19,12 +19,13 @@ Proyecto final del Módulo 4 · Diplomado en AI & LLMs para Mercados Financieros
 | 2 | Herramientas deterministas y traza | Hecho |
 | 3 | Cinco agentes y grafo de control | Hecho con modelos de guion; falta la prueba con modelos reales |
 | 4 | Evaluador, juez y congelación | Hecho y probado con trazas sintéticas; la congelación espera los modelos |
-| 5 | Campaña: R1–R5 ×3, R6 ×3 aparte | Ejecutor hecho y probado sin red; falta correrla |
-| 6 | PDF de resultados, diagrama y ZIP | Pendiente |
+| 5 | Campaña: R1–R5 ×3, R6 ×3 aparte | Hecho: campaña 20261027-145758, 9 de 15 obligatorias y 2 de 3 en R6 |
+| 6 | PDF de resultados, diagrama y ZIP | Hecho: entregables en `dist/`; falta la revisión humana |
 
-Ninguna ruta se ha ejecutado todavía con modelos reales. No hay resultados
-observados: las 23 trazas de `--probar-evaluador` son pruebas del evaluador,
-no ejecuciones del sistema. La integración con Gemini y el ejecutor de la
+La campaña oficial es `reports/campanas/20261027-145758`, con
+gemini-3.5-flash-lite para los agentes y gemini-3.1-flash-lite para el juez.
+Las 23 trazas de `--probar-evaluador` son pruebas del evaluador, no
+ejecuciones del sistema. La integración con Gemini y el ejecutor de la
 campaña están probados con un cliente falso, sin red ni cuota.
 
 ---
@@ -140,6 +141,22 @@ Pruebas deterministas, sin modelo ni red:
 .venv\Scripts\python -m pip install pytest ruff
 .venv\Scripts\python -m pytest
 ```
+
+---
+
+## Entregables
+
+```powershell
+.venv\Scripts\python scripts\diagrama.py    # reports/diagrama_arquitectura.pdf
+.venv\Scripts\python scripts\informe.py     # reports/informe_resultados.pdf
+.venv\Scripts\python scripts\empacar.py     # dist/: .py, informe, diagrama y ZIP
+```
+
+Ninguno llama a los modelos. Necesitan `xelatex` (MiKTeX). El informe toma
+todos sus números de `resultados.json` de la campaña completa más reciente. El
+análisis de fallas sale de `analisis.json` y la revisión humana de
+`revision.md`, los dos en la carpeta de la campaña. Después de llenar la
+revisión, se vuelven a correr `informe.py` y `empacar.py`.
 
 ---
 

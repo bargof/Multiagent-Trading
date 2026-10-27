@@ -568,3 +568,32 @@ congelación anterior (prueba nueva).
 - [ ] `--congelar`, con el código final.
 - [ ] La campaña: `python proyecto_multiagente.py`, las veces que haga falta.
 - [ ] La revisión humana en `revision.md`.
+
+---
+
+## Bloque 6 · 27 de octubre de 2026
+
+Entregables generados desde la campaña 20261027-145758, sin llamar a ningún
+modelo (D58).
+
+- *Diagrama.* Compila con xelatex y TikZ. Se revisó a la vista tres veces
+  hasta que ninguna flecha ni etiqueta se encimara. Las herramientas, las
+  delegaciones, las salidas, los límites y los modelos salen del código.
+- *Informe.* 12 páginas. La primera compilación tenía 83 renglones fuera de
+  margen, por las trayectorias y los nombres de campo sin espacios. Se
+  permitió partirlos después de comas, puntos y guiones bajos, y queda uno.
+- *ZIP.* 39 archivos, sin `.env`, sin el entorno virtual y sin la
+  compilación.
+- *El .py entregado* tiene el mismo SHA-256 que la campaña y que la
+  congelación.
+- *Desde una carpeta limpia,* con el ZIP descomprimido y sin key:
+  - `--probar-evaluador` da 23/23;
+  - `--tabla` imprime la campaña;
+  - sin opciones, avisa que falta la key y termina sin llamadas.
+- `ruff check` y `ruff format --check` quedan limpios. Las plantillas de LaTeX
+  quedan fuera de la regla de largo de renglón.
+
+### Pendiente
+
+- [ ] La revisión humana en `revision.md`; después, `scripts/informe.py` y
+  `scripts/empacar.py`.

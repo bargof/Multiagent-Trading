@@ -7,3 +7,5 @@ __pycache__/
 .DS_Store
 # El ZIP de entrega se genera; no se versiona.
 dist/
+# Archivos de compilación de LaTeX del informe y el diagrama.
+reports/build/
