@@ -16,6 +16,7 @@ from proyecto_multiagente import (
     CriterioTrayectoria,
     huella,
     huellas_campana,
+    proveedor_de,
 )
 
 # Conteos de la sección 2: (eventos evaluados, de los cuales herramientas).
@@ -107,12 +108,8 @@ def test_jueces_con_tres_criterios():
 
 
 def test_huellas_estables_y_sensibles():
-    config = Configuracion(
-        modelo="m", modelo_juez="m", temperatura=0.0, hay_api_key=False
-    )
-    otra = Configuracion(
-        modelo="otro", modelo_juez="m", temperatura=0.0, hay_api_key=False
-    )
+    config = Configuracion(modelo="m", modelo_juez="claude-j", temperatura=0.0)
+    otra = Configuracion(modelo="otro", modelo_juez="claude-j", temperatura=0.0)
     assert huellas_campana(config) == huellas_campana(config)
     assert (
         huellas_campana(config)["configuracion"]
@@ -122,7 +119,24 @@ def test_huellas_estables_y_sensibles():
     assert huella({"a": 1, "b": 2}) == huella({"b": 2, "a": 1})
 
 
-def test_la_api_key_no_entra_en_las_huellas():
-    con = Configuracion(modelo="m", modelo_juez="m", temperatura=0.0, hay_api_key=True)
-    sin = Configuracion(modelo="m", modelo_juez="m", temperatura=0.0, hay_api_key=False)
-    assert huellas_campana(con) == huellas_campana(sin)
+def test_las_api_keys_no_entran_en_las_huellas(monkeypatch):
+    config = Configuracion(modelo="m", modelo_juez="claude-j", temperatura=0.0)
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    sin = huellas_campana(config)
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-prueba")
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-prueba")
+    assert huellas_campana(config) == sin
+    assert "sk-" not in repr(config)
+
+
+def test_cada_modelo_pide_la_key_de_su_proveedor(monkeypatch):
+    """Decisión D22: agentes con OpenAI y juez con Anthropic."""
+    config = Configuracion.desde_entorno()
+    assert proveedor_de(config.modelo) == "openai"
+    assert proveedor_de(config.modelo_juez) == "anthropic"
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    assert config.keys_faltantes() == ["ANTHROPIC_API_KEY", "OPENAI_API_KEY"]
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-prueba")
+    assert config.keys_faltantes() == ["ANTHROPIC_API_KEY"]

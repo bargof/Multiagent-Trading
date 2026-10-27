@@ -49,3 +49,159 @@ lo cubre.
 - [ ] Configurar `OPENAI_API_KEY` y correr `--verificar` con el modelo.
 - [ ] Registrar aquí disponibilidad, tokens de la llamada mínima, llamada a
       herramienta y salida estructurada.
+
+---
+
+## Bloque 2 · 26 de octubre de 2026
+
+**Qué se construyó.**
+- El `Entorno`: una copia aislada de los datos por caso, con las fallas
+  inyectadas y la propuesta vigente.
+- Las once herramientas de las secciones 4.3 y 5.1, con sus esquemas de
+  argumentos.
+- La `Traza` y el `Presupuesto`.
+- La `Mesa`, el único punto por el que pasa toda llamada.
+
+**Verificación manual de R3, R4 y R5.** Se llamó a cada herramienta con los
+argumentos de la clave y se comparó la salida con las cifras calculadas a mano
+en la sección 2:
+
+| Ruta | Herramienta | Observado | Clave |
+|---|---|---|---|
+| R3 | calcular_exposicion(P1, Q100) | costo 5,000; XYZ 15,000; efectivo 25,000; total 100,000; peso 15% | igual |
+| R3 | simular_escenarios(P1, Q100, [E1]) | pérdida 1,000 → 1,500; diferencia 500 | igual |
+| R5 | calcular_exposicion(P1, Q600) | costo 30,000; XYZ 40,000; efectivo 0; peso 40% | igual |
+| R5 | validar_propuesta(P1, Q600) | cumple=false; LIMITE_CONCENTRACION; XYZ 40 vs 30 | igual |
+| R4 | consultar_precio(XYZ, T0) con QERR | status=error, data=null, PRICE_UNAVAILABLE | igual |
+| R4 | consultar_portafolio(P1) con QERR | XYZ con precio y valor null; total null | (decisión D4) |
+
+Estas son pruebas de infraestructura. Ningún agente intervino: las ejecuciones
+del sistema siguen pendientes.
+
+**Pruebas deterministas.** `pytest`: 135 aprobadas. Al bloque anterior se
+suman:
+- `test_herramientas.py`: cifras contra la clave, la falla QERR, la validación
+  de POL1, versiones de propuesta, cortes, identificadores y aislamiento.
+- `test_mesa.py`: permisos, argumentos, presupuesto y traza.
+
+Quedan cubiertas las comprobaciones de la sección 7.2 que no dependen del
+grafo:
+- versión alterada después del dictamen;
+- herramienta no autorizada;
+- noticia posterior a T0;
+- presupuesto agotado;
+- argumentos inválidos;
+- cantidad negativa;
+- efectivo insuficiente.
+
+### Lo que se aprendió: una prueba de las pruebas que no probaba nada
+
+Para saber si las pruebas atrapan errores reales, se rompieron a propósito dos
+reglas en una copia del archivo:
+
+- **A.** La compra no resta el efectivo. Es el error de los $105,000 que R3
+  quiere detectar.
+- **B.** QERR solo afecta a `consultar_precio`, como en la lectura literal de
+  la especificación.
+
+El primer intento dio 135 aprobadas con ambas mutaciones. No era que las
+pruebas fueran débiles: `python -m pytest` agrega el directorio actual a
+`sys.path`, y pytest siguió importando el archivo original. Corriendo desde la
+copia, la mutación A reprueba 5 pruebas y la B reprueba 4. Una copia sin
+mutar, corrida igual, pasa las 135.
+
+La lección es la misma que la sección 2.8 aplica al evaluador: un
+comprobador que nunca falla no demuestra nada hasta que se le da algo que
+debería hacerlo fallar.
+
+---
+
+## Bloque 3 · 26 de octubre de 2026
+
+**Qué se construyó.**
+- Los cinco agentes (`create_agent`), con su prompt por rol y su salida
+  estructurada.
+- Las tres delegaciones del supervisor.
+- El middleware que pasa toda llamada por la Mesa, aplica el presupuesto de
+  llamadas al modelo y el reintento de transporte, y registra cada llamada al
+  modelo.
+- El grafo de control de la sección 5.3: `iniciar → supervisor →
+  clasificar_salida → revisar_riesgo → verificar_control → finalizar`, con la
+  devolución al supervisor.
+- `--consulta`, para correr un caso de desarrollo.
+
+**Cómo se probó sin modelos reales.** `tests/guion.py` define un modelo falso
+que devuelve respuestas fijadas de antemano. Cada prueba de
+`tests/unit/test_grafo.py` fija qué «pide» cada agente y verifica qué hace el
+sistema con eso. Son pruebas de infraestructura: dicen qué hace el grafo con
+lo que un modelo pida, no qué pediría un modelo real.
+
+Lo que quedó cubierto:
+
+- **Las salidas principales.** La consulta informativa, el bloqueo de Q600,
+  Q100 pendiente de revisión humana, el cálculo hipotético sin riesgo y la
+  falla QERR. Con guiones que siguen la trayectoria de R5 y R6, la traza
+  produce exactamente los 7 eventos evaluados que espera la clave.
+- **La autoridad de la validación.**
+  - Si A4 no valida, o valida otra cantidad, el resultado es
+    `error_controlado` y la propuesta no se libera.
+  - Si A4 declara conforme una propuesta con incumplimientos, la propuesta
+    queda bloqueada y la contradicción se registra.
+- **La clasificación.** Una orden en la solicitud activa riesgo aunque el
+  supervisor diga «informativo». Una propuesta de A3 lo activa aunque la
+  solicitud no tenga verbo de orden.
+- **La infraestructura de la sección 7.2.**
+  - herramienta inventada;
+  - argumentos inválidos;
+  - delegación inexistente;
+  - salida fuera de esquema, con una reparación;
+  - límite de llamadas al modelo y de herramientas por especialista;
+  - reintento de transporte;
+  - evidencia no observada;
+  - llamadas simultáneas;
+  - aislamiento entre casos;
+  - que la clave no aparezca en ningún prompt.
+
+**Resultado.** `pytest`: 169 aprobadas. `ruff` sin observaciones. El grafo
+que dibuja LangGraph coincide con la sección 5.3.
+
+**Prueba de mutaciones.** Se rompieron dos controles en una copia:
+
+| Mutación | Primera corrida | Tras corregir la prueba |
+|---|---|---|
+| `verificar_control` acepta la validación de otra propuesta | 1 prueba falla | — |
+| `clasificar_salida` ignora que A3 propone | **0 pruebas fallan** | 1 prueba falla |
+| Copia sin mutar | 169 pasan | 169 pasan |
+
+La segunda mutación pasó desapercibida: la prueba que debía cubrirla usaba la
+entrada de R5, que activa riesgo por sí sola por la detección de órdenes. La
+prueba se reescribió con una solicitud sin verbo de orden, en la que solo
+queda activa la señal de A3.
+
+### Lo que se aprendió
+
+**Un guion que repetía el mismo objeto.** `[pide(...)] * 5` repite cinco
+veces el mismo mensaje, con el mismo identificador de llamada. LangGraph
+fusiona los mensajes que comparten identificador, así que el agente vio una
+sola llamada donde el guion pedía cinco. La prueba del límite de herramientas
+fallaba por eso y no por el sistema. El modelo falso entrega ahora una copia
+con identificadores nuevos en cada turno.
+
+**El límite que actuaba no era el documentado.** Con un tope interno de 50
+pasos por agente, LangGraph cortaba el caso a las 26 llamadas al modelo,
+antes del límite de 40 de la sección 3.2. El resultado era el mismo,
+`error_controlado`, pero por un motivo que la especificación no declara. El
+tope interno quedó en 2 × 40 + 10 (decisión D31).
+
+**El `.env` y los comentarios.** La plantilla nueva tenía comentarios al final
+de la línea. El cargador los habría leído como parte de la key:
+`OPENAI_API_KEY=sk-abc   # agentes` daba una key inválida, que solo habría
+fallado minutos después como un error de autenticación. Los comentarios
+pasaron a líneas propias, el cargador ignora los de final de línea y
+`test_configuracion.py` lo cubre.
+
+### Pendiente para cerrar el bloque
+
+- [ ] `--verificar` con las dos keys.
+- [ ] Un caso de desarrollo y un bloqueo con gpt-4.1-mini, con entradas
+      distintas de R1–R6 para no ajustar los prompts a la clave.
