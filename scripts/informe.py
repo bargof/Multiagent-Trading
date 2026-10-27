@@ -1,10 +1,11 @@
 """Documento de resultados (entregable 2), generado desde una campaña.
 
-Todos los números salen de reports/campanas/<id>/resultados.json y
-campana.json, que escribe el ejecutable; ninguno se copia a mano. Los cinco
-campos de cada ruta salen de la clave del ejecutable. El análisis de fallas
-sale de analisis.json, y la revisión humana de revision.md: si está sin
-llenar, el documento lo dice. Volver a generarlo no llama a ningún modelo.
+Corto y fácil de leer, pero con lo que pide la rúbrica para cada ruta: sus
+cinco campos, trayectoria y resultado esperados contra obtenidos, métricas y,
+para cada falla, en qué paso falló y por qué. Los números salen de
+reports/campanas/<id>/resultados.json, que escribe el ejecutable; ninguno se
+copia a mano. El detalle completo se queda en ese JSON. El análisis sale de
+analisis.json y la revisión de revision.md. No llama a ningún modelo.
 
     .venv\\Scripts\\python scripts\\informe.py                 # campaña más reciente completa
     .venv\\Scripts\\python scripts\\informe.py reports\\campanas\\<id>
@@ -25,6 +26,80 @@ import proyecto_multiagente as pm  # noqa: E402
 
 DESTINO = RAIZ / "reports" / "informe_resultados.pdf"
 DIAGRAMA = RAIZ / "reports" / "diagrama_arquitectura.pdf"
+
+# Lo que prueba cada ruta, dicho en simple.
+QUE_PRUEBA = {
+    "R1": "Explicar una noticia",
+    "R2": "Cruzar una noticia con el reporte financiero",
+    "R3": "Calcular una compra hipotética",
+    "R4": "Pedir un precio que no está disponible",
+    "R5": "Una compra que rompe el límite",
+    "R6": "Una compra válida, que espera a una persona",
+}
+# El criterio de trayectoria de cada ruta y su justificación (sección 4 del
+# ejecutable), dichos en simple.
+COMO_SE_COMPARA = {
+    "R1": "Exacto: con una sola herramienta basta, así que cualquier paso de más "
+    "reprueba.",
+    "R2": "En cualquier orden: noticias y finanzas no dependen una de la otra.",
+    "R3": "En orden: primero los datos, después el cálculo y al final la "
+    "simulación. Se permiten pasos extra.",
+    "R4": "En orden: pedir el precio, ver el error y responder. Se permite un "
+    "reintento.",
+    "R5": "En orden: datos, cálculo, riesgo y validación. Se permiten pasos extra.",
+    "R6": "En orden, igual que R5.",
+}
+# Solo las cifras que importan de cada resultado; las demás están en el JSON.
+DESTACADOS = {
+    "R1": ["estado", "metricas.evento", "metricas.sentimiento"],
+    "R2": [
+        "estado",
+        "metricas.crecimiento_ingresos_pct",
+        "metricas.variacion_utilidad_operativa_pct",
+        "metricas.cambio_margen_pp",
+    ],
+    "R3": [
+        "estado",
+        "metricas.costo",
+        "metricas.peso_xyz_pct",
+        "metricas.efectivo_despues",
+        "metricas.perdida_antes",
+        "metricas.perdida_despues",
+    ],
+    "R4": ["estado", "error", "metricas.precio"],
+    "R5": ["estado", "metricas.motivo", "metricas.peso_xyz_pct", "metricas.limite_pct"],
+    "R6": [
+        "estado",
+        "metricas.costo",
+        "metricas.peso_xyz_pct",
+        "metricas.efectivo_despues",
+    ],
+}
+NOMBRES = {
+    "estado": "estado",
+    "error": "error",
+    "metricas.evento": "evento",
+    "metricas.sentimiento": "sentimiento",
+    "metricas.crecimiento_ingresos_pct": "crecimiento de ingresos",
+    "metricas.variacion_utilidad_operativa_pct": "variación de utilidad operativa",
+    "metricas.cambio_margen_pp": "cambio de margen",
+    "metricas.costo": "costo",
+    "metricas.peso_xyz_pct": "peso de XYZ",
+    "metricas.efectivo_despues": "efectivo después",
+    "metricas.perdida_antes": "pérdida en E1 antes",
+    "metricas.perdida_despues": "pérdida en E1 después",
+    "metricas.precio": "precio",
+    "metricas.motivo": "motivo",
+    "metricas.limite_pct": "límite",
+    "cifras_sin_respaldo": "cifras sin respaldo",
+}
+UNIDADES = {
+    "metricas.crecimiento_ingresos_pct": " %",
+    "metricas.variacion_utilidad_operativa_pct": " %",
+    "metricas.cambio_margen_pp": " pp",
+    "metricas.peso_xyz_pct": " %",
+    "metricas.limite_pct": " %",
+}
 
 
 # --- Texto para LaTeX ---
@@ -49,48 +124,76 @@ def tex(texto) -> str:
 
 def partible(texto) -> str:
     """Texto que puede partirse después de comas, paréntesis, puntos y guiones
-    bajos: las trayectorias y los nombres de campo no tienen espacios."""
+    bajos: los pasos y los nombres de campo no tienen espacios."""
     # No se parte dentro de un número: 25,000 o 0.01 quedan juntos.
     partes = re.split(r"(?<=[,(={:._/])(?!\d)", str(texto))
     return r"\allowbreak{}".join(tex(p) for p in partes)
 
 
-def codigo(texto) -> str:
-    return r"\texttt{" + partible(texto) + "}"
-
-
-def limpio(detalle: str) -> str:
-    """<EstadoFinal.BLOQUEADA: 'bloqueada'> se lee mejor como bloqueada."""
-    return re.sub(r"<\w+\.\w+: '([^']*)'>", r"\1", detalle)
-
-
-def valor(v, largo: int = 48) -> str:
+def cifra(campo: str, v) -> str:
     if v is None:
-        return "—"
+        return "ninguno"
     if isinstance(v, bool):
         return "sí" if v else "no"
-    if isinstance(v, float):
-        return f"{v:g}"
-    if isinstance(v, list | dict):
-        v = json.dumps(v, ensure_ascii=False)
-    v = str(v)
-    return v if len(v) <= largo else v[: largo - 1] + "…"
+    # La clave guarda los montos como texto ("5000"): se leen como número.
+    if isinstance(v, str) and re.fullmatch(r"-?\d+(\.\d+)?", v):
+        v = float(v)
+    if isinstance(v, int | float):
+        v = f"{v:,.0f}" if abs(v) >= 1000 else f"{v:g}"
+    elif isinstance(v, list):
+        v = ", ".join(map(str, v)) or "ninguna"
+    return f"{v}{UNIDADES.get(campo, '')}"
 
 
-def si_no(v) -> str:
-    return "—" if v is None else ("sí" if v else r"\textbf{no}")
+# --- Pasos legibles ---
+
+_PASO = re.compile(
+    r"^(?:#\d+ )?(?P<actor>[^.(]+)\.(?P<nombre>\w+)\((?P<args>.*)\)"
+    r"(?: → (?P<estado>\w+)(?P<bloqueado> BLOQUEADO)?)?$"
+)
+# Lo que no ayuda a leer el paso: la fecha de corte es la misma en todos.
+_SIN_MOSTRAR = {"fecha_corte", "corte", "tarea", "version"}
 
 
-def decimal(v) -> str:
-    return "n/a" if v is None else f"{v:.2f}"
+def argumentos(texto: str) -> str:
+    valores = []
+    if m := re.search(r"propuesta=\{([^}]*)\}", texto):
+        p = dict(re.findall(r'"(\w+)":"?([^",]*)"?', m.group(1)))
+        valores.append(f"compra {p.get('cantidad')} {p.get('empresa')}")
+        texto = texto.replace(m.group(0), "")
+    for clave, v in re.findall(r'(\w+)=("[^"]*"|\[[^\]]*\]|[\w.]+)', texto):
+        if clave not in _SIN_MOSTRAR:
+            valores.append(v.strip('"[]').replace('"', ""))
+    return ", ".join(v for v in valores if v)
 
 
-def de(par) -> str:
-    return "—" if par is None else f"{par[0]}/{par[1]}"
+def paso(texto: str) -> str:
+    """«#3 A0→A1.consultar_noticias(empresa="XYZ", id="N1") → ok» se lee
+    «A0→A1 consultar_noticias(XYZ, N1)»."""
+    m = _PASO.match(texto)
+    if not m:
+        return texto
+    legible = f"{m['actor']} {m['nombre']}({argumentos(m['args'])})"
+    if m["estado"] == "error":
+        legible += " → error"
+    if m["bloqueado"]:
+        legible += " → bloqueado"
+    return legible
 
 
-def cuantos(lista) -> str:
-    return "—" if lista is None else str(len(lista))
+def camino(pasos: list[str]) -> str:
+    return r" \,·\, ".join(
+        r"\mbox{\texttt{" + partible(paso(p)) + "}}"
+        if len(paso(p)) < 40
+        else r"\texttt{" + partible(paso(p)) + "}"
+        for p in pasos
+    )
+
+
+def lista(nombres: list[str]) -> str:
+    if len(nombres) == 1:
+        return nombres[0]
+    return ", ".join(nombres[:-1]) + " y " + nombres[-1]
 
 
 # --- Datos ---
@@ -111,9 +214,9 @@ def leer_revision(carpeta: Path) -> tuple[dict[str, list[dict]], bool]:
     borrador del asistente.
 
     Un renglón cuenta como revisado si tiene [x]. Del juez se lee si el
-    revisor está de acuerdo o en desacuerdo y su motivo; del resto, la marca
-    y sus notas. Una nota que empieza con «(borrador IA)» la escribió el
-    asistente: no es revisión humana hasta que una persona la confirme.
+    revisor está de acuerdo o en desacuerdo; del resto, la marca y sus notas.
+    Una nota que empieza con «(borrador IA)» no es revisión humana hasta que
+    una persona la confirme.
     """
     archivo = carpeta / "revision.md"
     if not archivo.is_file():
@@ -134,535 +237,376 @@ def leer_revision(carpeta: Path) -> tuple[dict[str, list[dict]], bool]:
             siguiente = lineas[i + 1] if i + 1 < len(lineas) else ""
             acuerdo = re.search(r"\[[xX]\] de acuerdo", siguiente)
             desacuerdo = re.search(r"\[[xX]\] en desacuerdo", siguiente)
-            motivo = siguiente.split("Motivo:", 1)[-1].strip()
             revision[actual].append(
                 {
-                    "punto": f"{m.group(1)} (juez: {m.group(2)})",
+                    "punto": m.group(1),
+                    "juez": True,
                     "marcado": bool(acuerdo or desacuerdo),
                     "dictamen": "de acuerdo"
                     if acuerdo
                     else ("en desacuerdo" if desacuerdo else None),
-                    "notas": motivo,
+                    "notas": siguiente.split("Motivo:", 1)[-1].strip(),
                 }
             )
         elif m := re.match(r"- \[([ xX])\] (.*?)(?:Notas:(.*))?$", linea):
             revision[actual].append(
                 {
                     "punto": m.group(2).strip(),
+                    "juez": False,
                     "marcado": m.group(1) in "xX",
                     "dictamen": "se cumple" if m.group(1) in "xX" else None,
                     "notas": (m.group(3) or "").strip(),
                 }
             )
-        elif m := re.match(r"- (Causa probable|Efecto):(.*)$", linea):
-            if m.group(2).strip():
-                revision[actual].append(
-                    {
-                        "punto": m.group(1),
-                        "marcado": True,
-                        "dictamen": "anotado",
-                        "notas": m.group(2).strip(),
-                    }
-                )
-    for lista in revision.values():
-        for p in lista:
-            if BORRADOR in p["notas"]:
-                p["origen"] = "borrador IA, confirmado" if confirmado else "borrador IA"
-                p["notas"] = p["notas"].replace(BORRADOR, "").strip()
-            else:
-                p["origen"] = "persona"
+    for puntos in revision.values():
+        for p in puntos:
+            p["humano"] = BORRADOR not in p["notas"] or confirmado
+            p["notas"] = p["notas"].replace(BORRADOR, "").strip()
     return revision, confirmado
 
 
 # --- Secciones ---
 
 
-def tabla_ejecuciones(filas: list[dict]) -> str:
-    renglones = [
-        rf"{f['ejecucion']} & {tex(f['veredicto'])} & {si_no(f['trayectoria_paso'])}"
-        rf" & {si_no(f['resultado_paso'])} & {decimal(f['cobertura'])}"
-        rf" & {decimal(f['precision'])} & {de(f['eventos'])} & {de(f['herramientas'])}"
-        rf" & {valor(f['pasos_extra'])} & {cuantos(f['cifras_sin_respaldo'])}"
-        rf" & {cuantos(f['acciones_prohibidas'])} & {f['llamadas_modelo']} \\"
-        for f in filas
-    ]
-    return (
-        r"""{\small\begin{tabular}{llcccccccccc}
-\toprule
-ejec. & veredicto & tray. & res. & cobert. & precis. & eventos & herram. & extra & sin resp. & prohib. & llamadas \\
-\midrule
-"""
-        + "\n".join(renglones)
-        + "\n\\bottomrule\n\\end{tabular}}\n"
-    )
-
-
-def comprobaciones(filas: list[dict]) -> str:
-    """Resultado esperado frente a obtenido, campo por campo."""
-    primera = next(f for f in filas if f["comprobaciones"])
-    columnas = len(filas)
-    ancho = f"{8.6 / columnas:.2f}cm"
-    encabezado = " & ".join(f["ejecucion"] for f in filas)
-    renglones = []
-    for i, c in enumerate(primera["comprobaciones"]):
-        esperado = valor(c["esperado"], 40)
-        if c["tolerancia"]:
-            esperado += f" ± {c['tolerancia']}"
-        celdas = []
-        for f in filas:
-            if not f["comprobaciones"]:
-                celdas.append("—")
-                continue
-            obs = f["comprobaciones"][i]
-            texto = "ausente" if obs["ausente"] else valor(obs["observado"], 40)
-            celdas.append(
-                partible(texto)
-                if obs["cumple"]
-                else r"\textbf{" + partible(texto) + "}"
-            )
-        renglones.append(
-            rf"{codigo(c['campo'])} & {partible(esperado)} & " + " & ".join(celdas)
-        )
-    return (
-        rf"""{{\footnotesize\begin{{longtable}}{{L{{3.2cm}}L{{3.0cm}}*{{{columnas}}}{{L{{{ancho}}}}}}}
-\toprule
-campo & esperado & {encabezado} \\
-\midrule
-\endhead
-"""
-        + " \\\\\n".join(renglones)
-        + " \\\\\n\\bottomrule\n\\end{longtable}}\n"
-        + r"{\footnotesize En negrita, lo que no cumple.}"
-        + "\n"
-    )
-
-
-def trayectorias(ruta: dict) -> str:
-    esperada = "\n".join(rf"\item {codigo(e)}" for e in ruta["trayectoria_esperada"])
-    partes = [
-        r"\textbf{Trayectoria esperada} ("
-        + tex(ruta["criterio_trayectoria"])
-        + "):\n\\begin{enumerate}[nosep,leftmargin=*]\n"
-        + esperada
-        + "\n\\end{enumerate}"
-    ]
+def resultado_obtenido(ruta: dict) -> str:
+    """Igual que lo esperado, o lo que no cumplió en cada ejecución."""
+    iguales, distintas = [], []
     for f in ruta["ejecuciones"]:
-        pasos = "\n".join(rf"\item {codigo(p)}" for p in f["trayectoria_obtenida"])
-        partes.append(
-            rf"\textbf{{Obtenida en {f['ejecucion']}}} ({tex(f['veredicto'])}):"
-            + "\n\\begin{itemize}[nosep,leftmargin=*,label={}]\n"
-            + (pasos or r"\item —")
-            + "\n\\end{itemize}"
+        malas = [c for c in f["comprobaciones"] or [] if not c["cumple"]]
+        if f["comprobaciones"] and not malas:
+            iguales.append(f["ejecucion"])
+            continue
+        # Solo los campos con nombre legible; el resto se cuenta.
+        visibles = [c for c in malas if c["campo"] in NOMBRES]
+        detalle = "; ".join(
+            f"{NOMBRES[c['campo']]} "
+            + ("ausente" if c["ausente"] else cifra(c["campo"], c["observado"]))
+            + f" (se esperaba {cifra(c['campo'], c['esperado'])})"
+            for c in visibles
         )
-    return "{\\footnotesize\\raggedright\n" + "\n\n".join(partes) + "\n\n}\n"
+        if otros := len(malas) - len(visibles):
+            detalle += f", y {otros} cifras más ausentes"
+        distintas.append(rf"\textbf{{{f['ejecucion']}}}: {tex(detalle)}")
+    partes = []
+    if iguales:
+        partes.append(f"igual a lo esperado en {lista(iguales)}")
+    partes += distintas
+    return ". ".join(p[0].upper() + p[1:] for p in partes) + "."
+
+
+def trayectoria_obtenida(ruta: dict) -> str:
+    iguales, con_extras, distintas = [], [], []
+    for f in ruta["ejecuciones"]:
+        if f["trayectoria_paso"] and not f["pasos_extra"]:
+            iguales.append(f["ejecucion"])
+        elif f["trayectoria_paso"]:
+            con_extras.append(f"{f['ejecucion']} (+{f['pasos_extra']})")
+        else:
+            distintas.append(
+                rf"\textbf{{{f['ejecucion']}}}: {camino(f['trayectoria_obtenida'])}"
+            )
+    partes = []
+    if iguales:
+        partes.append(f"Igual a la esperada en {lista(iguales)}.")
+    if con_extras:
+        partes.append(f"Correcta, con pasos extra permitidos, en {lista(con_extras)}.")
+    return " ".join(partes) + "".join(rf"\par {d}" for d in distintas)
+
+
+def si_no(v: bool) -> str:
+    return "sí" if v else r"\textbf{no}"
+
+
+def tabla(ruta: dict) -> str:
+    renglones = "\n".join(
+        rf"{f['ejecucion']} & {si_no(f['veredicto'] == 'aprobada')}"
+        rf" & {si_no(f['trayectoria_paso'])}"
+        rf" & {si_no(f['resultado_paso'])}"
+        rf" & {f['cobertura'] * 100:.0f} \%"
+        rf" & {f['eventos'][0]} de {f['eventos'][1]} \\"
+        for f in ruta["ejecuciones"]
+    )
+    return (
+        r"""\begin{tabular}{lccccc}
+\toprule
+& aprobó & camino bien & respuesta bien & herramientas correctas & pasos \\
+\midrule
+"""
+        + renglones
+        + "\n\\bottomrule\n\\end{tabular}"
+    )
 
 
 def seccion_ruta(ruta: dict, clave: pm.Ruta, analisis: dict) -> str:
-    juez = ""
+    primera = ruta["ejecuciones"][0]
+    por_campo = {c["campo"]: c for c in primera["comprobaciones"]}
+    esperado = ", ".join(
+        f"sin {NOMBRES[k]}"
+        if por_campo[k]["esperado"] is None
+        else f"{NOMBRES[k]} {cifra(k, por_campo[k]['esperado'])}"
+        for k in DESTACADOS[ruta["ruta"]]
+        if k in por_campo
+    )
+    tolerancia = any(c["tolerancia"] for c in primera["comprobaciones"])
     if clave.juez:
-        criterios = pm.CRITERIOS_JUEZ[clave.juez]
-        juez = (
-            rf"\item[Juez {clave.juez}] Aprueba con los tres criterios:"
-            + "\n\\begin{itemize}[nosep]\n"
-            + "\n".join(rf"\item {k}: {tex(v)}" for k, v in criterios.items())
+        como = f"exacto, y el texto con el juez {clave.juez} (3 criterios)"
+    elif tolerancia:
+        como = "estado exacto y cifras con tolerancia de ±0.01"
+    else:
+        como = "exacto"
+
+    fallas = [f for f in ruta["ejecuciones"] if f["veredicto"] != "aprobada"]
+    por_que = ""
+    if fallas:
+        renglones = []
+        for f in fallas:
+            d = f["primer_paso_divergente"]
+            plano = {"trayectoria": "el camino", "resultado": "la respuesta"}.get(
+                d["plano"], "un control"
+            )
+            donde = f" en el paso \\#{d['seq']}" if d["seq"] else ""
+            nota = analisis.get(f["ejecucion"], {})
+            renglones.append(
+                rf"\item \textbf{{{f['ejecucion']}}}: falló {plano}{donde}. "
+                + tex(nota.get("breve") or nota.get("causa") or "")
+            )
+        por_que = (
+            "\n\\textbf{Por qué falló}\n\\begin{itemize}[nosep,leftmargin=*]\n"
+            + "\n".join(renglones)
             + "\n\\end{itemize}\n"
         )
     control = ""
     if "control" in ruta:
         c = ruta["control"]
         control = (
-            rf"\textbf{{Control:}} bloqueó en {c['bloqueadas']} de "
-            rf"{ruta['realizadas']}; liberaciones indebidas: {c['liberadas']}." + "\n\n"
-        )
-    fallas = [f for f in ruta["ejecuciones"] if f["veredicto"] != "aprobada"]
-    analisis_ruta = ""
-    if fallas:
-        items = []
-        for f in fallas:
-            d = f["primer_paso_divergente"]
-            donde = (
-                tex(d["plano"]) + (f" \\#{d['seq']}" if d["seq"] else "")
-                if d
-                else "sin divergencia"
+            rf" Bloqueó la compra en {c['bloqueadas']} de {ruta['realizadas']}"
+            + (
+                " y no liberó ninguna."
+                if c["liberadas"] == 0
+                else f" y liberó {c['liberadas']}."
             )
-            nota = analisis.get(f["ejecucion"], {})
-            items.append(
-                rf"\item[{f['ejecucion']}] \textbf{{Primer paso divergente}} "
-                rf"({donde}): {partible(limpio(d['detalle']) if d else f['motivo'] or '')}"
-                + "\\\\\n"
-                + rf"\textbf{{Causa probable:}} {tex(nota.get('causa', 'pendiente de análisis.'))}"
-                + "\\\\\n"
-                + rf"\textbf{{Efecto:}} {tex(nota.get('efecto', 'pendiente de análisis.'))}"
-            )
-        analisis_ruta = (
-            "\\paragraph{Análisis de fallas}\n{\\raggedright\n"
-            "\\begin{description}[style=nextline,leftmargin=1.2cm]\n"
-            + "\n".join(items)
-            + "\n\\end{description}\n\n}\n"
         )
-    peor = ruta["peor"] or "—"
     return rf"""
-\subsection{{{ruta["ruta"]} · {tex(ruta["tipo_caso"])}}}
+\subsection*{{{ruta["ruta"]} · {tex(QUE_PRUEBA[ruta["ruta"]])} \hfill
+\normalsize {ruta["aprobadas"]} de {ruta["realizadas"]} aprobadas}}
 
-\begin{{description}}[leftmargin=3.4cm,style=sameline,font=\normalfont\bfseries]
-\item[Entrada] «{tex(ruta["entrada"])}»
-\item[Resultado esperado] estado \texttt{{{tex(ruta["estado_esperado"])}}}, con las
-comprobaciones de la tabla de abajo y sus tolerancias.
-{juez}\item[Criterio de trayectoria] \texttt{{{tex(ruta["criterio_trayectoria"])}}}.
-{tex(clave.justificacion_trayectoria)}
-\item[Criterio de resultado] {tex(ruta["criterio_resultado"])}
+\begin{{description}}[leftmargin=3.3cm,style=sameline,font=\normalfont\bfseries,nosep,itemsep=3pt]
+\item[Pide] «{tex(ruta["entrada"])}»
+\item[Camino esperado] {camino(ruta["trayectoria_esperada"])}
+\item[Cómo se compara] {tex(COMO_SE_COMPARA[ruta["ruta"]])}
+\item[Camino obtenido] {trayectoria_obtenida(ruta)}
+\item[Respuesta esperada] {partible(esperado)}. Se compara {como}.
+\item[Respuesta obtenida] {resultado_obtenido(ruta)}{control}
 \end{{description}}
 
-\textbf{{Aprobadas: {ruta["aprobadas"]} de {ruta["realizadas"]}.}} Peor ejecución:
-{peor}.
-
-{control}{tabla_ejecuciones(ruta["ejecuciones"])}
-
-\medskip
-\textbf{{Resultado esperado y obtenido}}
-
-{comprobaciones(ruta["ejecuciones"])}
-
-{trayectorias(ruta)}
-{analisis_ruta}"""
+\smallskip
+{{\small {tabla(ruta)}}}
+{por_que}"""
 
 
-def seccion_revision(revision: dict[str, list[dict]]) -> str:
-    puntos = [p for lista in revision.values() for p in lista]
-    marcados = [p for p in puntos if p["marcado"]]
-    humanos = [p for p in marcados if p["origen"] != "borrador IA"]
-    sin_confirmar = [p for p in marcados if p["origen"] == "borrador IA"]
-    if not marcados:
-        return (
-            r"La revisión humana de la sección 6.3 todavía no está registrada. Se "
-            r"hace en \texttt{revision.md}, en la carpeta de la campaña, y este "
-            r"documento se vuelve a generar sin llamar a ningún modelo. Hasta "
-            r"entonces, todos los juicios de este documento son los del evaluador "
-            r"automático y los del juez." + "\n"
-        )
-
-    del_juez = [p for p in humanos if "juez" in p["punto"]]
-    acuerdos = sum(p["dictamen"] == "de acuerdo" for p in del_juez)
-    estado = (
-        rf"Revisé {len(humanos)} de {len(puntos)} puntos. En R1 y R2 coincidí con el "
-        rf"juez en {acuerdos} de {len(del_juez)} criterios. Cuando discrepo, quedan "
-        r"los dos juicios y la puntuación automática no cambia."
+def seccion_juez(resumen: dict, revision: dict[str, list[dict]], modelo: str) -> str:
+    criterios = [
+        c
+        for r in resumen["rutas"]
+        for f in r["ejecuciones"]
+        if f["juez"] and f["juez"]["criterios"]
+        for c in f["juez"]["criterios"]
+    ]
+    aprobados = sum(c["cumple"] for c in criterios)
+    texto = (
+        rf"En R1 y R2 la respuesta es texto libre, así que la califica un juez: otro "
+        rf"modelo (\texttt{{{tex(modelo)}}}) que revisa tres criterios escritos antes "
+        r"de correr, por ejemplo «describe que XYZ redujo su guía de 8\,\% a 3\,\%». La "
+        rf"respuesta aprueba solo si cumple los tres. El juez dio por cumplidos "
+        rf"{aprobados} de {len(criterios)}."
     )
-    if sin_confirmar:
-        estado += (
-            rf" Otros {len(sin_confirmar)} puntos son un borrador sin confirmar y no "
-            r"cuentan como revisión humana."
+    del_juez = [p for puntos in revision.values() for p in puntos if p["juez"]]
+    revisados = [p for p in del_juez if p["marcado"] and p["humano"]]
+    if revisados:
+        acuerdos = sum(p["dictamen"] == "de acuerdo" for p in revisados)
+        desacuerdos = [
+            ej
+            for ej, puntos in revision.items()
+            for p in puntos
+            if p["juez"] and p["humano"] and p["dictamen"] == "en desacuerdo"
+        ]
+        texto += (
+            rf" Yo revisé esos mismos criterios y coincidí en {acuerdos} de "
+            rf"{len(revisados)}"
+            + (
+                f"; en {lista(desacuerdos)} el juez fue más generoso que yo."
+                if desacuerdos
+                else "."
+            )
         )
-    # Los acuerdos sin nota ya están en el conteo de arriba.
-    renglones = "\n".join(
-        rf"{ej} & {tex(p['punto'])} & {tex(p['dictamen'] or 'sin marcar')} & "
-        rf"{partible(p['notas'])} \\"
-        for ej, lista in revision.items()
-        for p in lista
-        if p["notas"] or p["dictamen"] == "en desacuerdo"
-    )
     return (
-        estado
-        + "\n\n"
-        + r"{\footnotesize\begin{longtable}{lL{4.4cm}lL{8.0cm}}"
-        + "\n\\toprule\n"
-        + r"ejec. & punto & dictamen & notas \\"
-        + "\n\\midrule\n\\endhead\n"
-        + renglones
-        + "\n\\bottomrule\n\\end{longtable}}\n"
+        texto
+        + r" Su límite: es un modelo chico del mismo proveedor que los agentes y puede "
+        r"premiar cierta redacción. Por eso solo lo uso para texto, nunca para "
+        r"números, y cuando discrepo quedan los dos juicios sin cambiar la "
+        r"puntuación automática."
     )
 
 
-def seccion_anteriores(carpeta: Path) -> str:
-    """Las demás campañas de reports/campanas, con lo que alcanzaron a correr."""
-    partes = []
-    for otra in pm.campanas(pm.DIR_CAMPANAS):
-        if otra.carpeta == carpeta:
-            continue
-        resumen = otra.resumen()
-        filas = [f for r in resumen["rutas"] for f in r["ejecuciones"]]
-        filas += resumen["interrumpidas"]
-        detalle = "; ".join(
-            f"{f['ejecucion']} {f['veredicto']}"
-            for f in sorted(filas, key=lambda f: f["inicio"])
-        )
-        partes.append(
-            rf"\item \texttt{{{otra.id}}} ({tex(resumen['estado'])}), agentes "
-            rf"\texttt{{{tex(resumen['modelos']['agentes'])}}}, juez "
-            rf"\texttt{{{tex(resumen['modelos']['juez'])}}}, congelación: "
-            rf"{tex(resumen['congelacion']['estado'])}. Ejecuciones: {tex(detalle)}."
-        )
-    if not partes:
-        return "No hubo otras campañas.\n"
-    return "\\begin{itemize}\n" + "\n".join(partes) + "\n\\end{itemize}\n"
+def nota_campanas(carpeta: Path) -> str:
+    otras = [c for c in pm.campanas(pm.DIR_CAMPANAS) if c.carpeta != carpeta]
+    if not otras:
+        return ""
+    return (
+        "Antes de esta campaña hubo otra con \\texttt{gemini-3.6-flash}, que se cortó "
+        "por cuota (ese modelo permite 20 llamadas al día). No la borré: está en "
+        "\\texttt{reports/campanas/" + tex(otras[-1].id) + "}."
+    )
 
 
 def documento(carpeta: Path) -> str:
-    campana = pm.Campana(carpeta)
-    meta = campana.meta
+    meta = pm.Campana(carpeta).meta
     resumen = json.loads((carpeta / "resultados.json").read_text(encoding="utf-8"))
-    analisis_archivo = carpeta / "analisis.json"
+    archivo_analisis = carpeta / "analisis.json"
     analisis = (
-        json.loads(analisis_archivo.read_text(encoding="utf-8"))
-        if analisis_archivo.is_file()
-        else {"fallas": {}, "patrones": []}
+        json.loads(archivo_analisis.read_text(encoding="utf-8"))
+        if archivo_analisis.is_file()
+        else {}
     )
     revision, _ = leer_revision(carpeta)
     claves = {r.ruta_id: r for r in pm.RUTAS}
     if meta["huellas"]["expectativas"] != pm.huella(pm.RUTAS):
         raise SystemExit("La clave del archivo no es la de la campaña: no se genera.")
 
-    ob, comp = resumen["obligatorias"], resumen["complementarias"]
-    rutas_ob = [r for r in resumen["rutas"] if r["obligatoria"]]
-    rutas_comp = [r for r in resumen["rutas"] if not r["obligatoria"]]
-    uso = resumen["uso"]
-    r5 = next(r for r in rutas_ob if "control" in r)
+    ob = resumen["obligatorias"]
+    rutas = resumen["rutas"]
+    r5 = next(r for r in rutas if "control" in r)
     prohibidas = sum(
-        len(f["acciones_prohibidas"] or [])
-        for r in resumen["rutas"]
-        for f in r["ejecuciones"]
+        len(f["acciones_prohibidas"] or []) for r in rutas for f in r["ejecuciones"]
     )
-    resumen_rutas = "\n".join(
-        rf"{r['ruta']} & {tex(r['tipo_caso'])} & \texttt{{{tex(r['criterio_trayectoria'])}}}"
-        rf" & {r['aprobadas']}/{r['realizadas']} & {r['peor']} \\"
-        for r in resumen["rutas"]
+    total = sum(r["realizadas"] for r in rutas)
+    tabla_rutas = "\n".join(
+        rf"{r['ruta']} & {tex(QUE_PRUEBA[r['ruta']])} & {r['aprobadas']} de "
+        rf"{r['realizadas']} & "
+        + str(sum(bool(f["trayectoria_paso"]) for f in r["ejecuciones"]))
+        + r" de 3 & "
+        + str(sum(bool(f["resultado_paso"]) for f in r["ejecuciones"]))
+        + r" de 3 \\"
+        + (r" \midrule" if r["ruta"] == "R5" else "")
+        for r in rutas
     )
-    agentes = "\n".join(
-        rf"{a} & {tex(rol)} & "
-        + ", ".join(rf"\texttt{{{tex(h)}}}" for h in pm.CATALOGO.get(a, ()))
-        + (
-            ", ".join(
-                rf"\texttt{{{tex(d.nombre)}}} (→{d.destino})"
-                for d in pm.DELEGACIONES.values()
-            )
-            if a == "A0"
-            else ""
-        )
-        + rf" & \texttt{{{tex(pm.SALIDAS[a].__name__)}}} \\"
-        for a, rol in (
-            ("A0", "Supervisor"),
-            ("A1", "Noticias"),
-            ("A2", "Finanzas"),
-            ("A3", "Portafolio"),
-            ("A4", "Riesgo"),
-        )
+    puntos = lambda clave: "\n".join(  # noqa: E731
+        rf"\item {tex(t)}" for t in analisis.get(clave, [])
     )
-    patrones = "\n".join(rf"\item {tex(p)}" for p in analisis.get("patrones", []))
-    total = ob["realizadas"] + comp["realizadas"]
-    # Las frases del resumen se arman con los datos, no se dan por hechas.
-    frase_prohibidas = (
-        f"y no hubo acciones prohibidas en ninguna de las {total}"
-        if prohibidas == 0
-        else f"y hubo {prohibidas} acciones prohibidas en las {total}"
-    )
-    interrumpidas = len(resumen["interrumpidas"])
-    frase_campana = (
-        "La campaña coincide con la congelación"
-        if meta["congelacion"]["estado"] == "coincide"
-        else "La campaña \\textbf{no} coincide con la congelación"
-    ) + (
-        " y no tuvo interrupciones."
-        if interrumpidas == 0
-        else f" y tuvo {interrumpidas} interrupciones, que se repitieron."
-    )
-    limites = pm.LIMITES
+    uso = resumen["uso"]
     modelos = meta["modelos"]
 
-    return rf"""\documentclass[10pt]{{article}}
+    return rf"""\documentclass[11pt]{{article}}
 \usepackage{{fontspec}}
-\usepackage[a4paper,margin=1.8cm]{{geometry}}
+\usepackage[a4paper,margin=2.2cm]{{geometry}}
 \usepackage[spanish,es-noshorthands]{{babel}}
-\usepackage{{booktabs,longtable,array,xcolor,enumitem,graphicx}}
+\usepackage{{booktabs,array,enumitem,graphicx}}
 \usepackage[hidelinks]{{hyperref}}
+\renewcommand{{\familydefault}}{{\sfdefault}}
 \setlength{{\parindent}}{{0pt}}
-\setlength{{\parskip}}{{5pt}}
-\newcolumntype{{L}}[1]{{>{{\raggedright\arraybackslash}}p{{#1}}}}
+\setlength{{\parskip}}{{6pt}}
 \begin{{document}}
+\raggedright
 
-{{\raggedright\LARGE\bfseries Comité de inversión multiagente:\\ resultados de la evaluación\par}}
+{{\LARGE\bfseries Comité de inversión multiagente\par}}
+\smallskip
+{{\large Resultados de la evaluación\par}}
+\smallskip
+{{\small Proyecto final · Módulo 4 · Diplomado en AI \& LLMs para Mercados
+Financieros · ITAM\par}}
+
+\bigskip
+Hice un sistema de cinco agentes que analiza una compra sobre un portafolio ficticio
+y la pasa por una revisión de riesgo. Para evaluarlo definí, antes de programarlo,
+cinco casos de prueba, y corrí cada uno tres veces.
+
+\section*{{Lo más importante}}
+
+\begin{{center}}
+\begin{{tabular}}{{ccc}}
+{{\Huge\bfseries {ob["aprobadas"]} de {ob["planeadas"]}}} &
+{{\Huge\bfseries {r5["control"]["bloqueadas"]} de {r5["realizadas"]}}} &
+{{\Huge\bfseries {prohibidas}}} \\[4pt]
+rutas aprobadas & veces que se bloqueó & acciones prohibidas \\
+& la compra que rompía el límite & en {total} ejecuciones \\
+\end{{tabular}}
+\end{{center}}
 
 \medskip
-Proyecto final, Módulo 4 · Diplomado en AI \& LLMs para Mercados Financieros ·
-ITAM. Especificación v{tex(meta["especificacion"])}. Campaña
-\texttt{{{tex(meta["campana"])}}}, iniciada el {tex(meta["creada"][:16].replace("T", " a las "))}.
-
-\section{{Resumen}}
-
-Definí cinco rutas de prueba antes de correr el sistema, una por cada tipo de
-caso de la rúbrica, y corrí cada una tres veces.
-
-\begin{{itemize}}[nosep]
-\item \textbf{{Obligatorias: {ob["aprobadas"]} de {ob["planeadas"]} aprobadas}}
-({ob["fallidas"]} fallidas, {ob["no_completadas"]} sin completar,
-{ob["errores"]} errores del programa).
-\item R6, que va aparte: {comp["aprobadas"]} de {comp["planeadas"]}.
-\item R5 bloqueó la compra en {r5["control"]["bloqueadas"]} de {r5["realizadas"]}
-ejecuciones, {frase_prohibidas}.
-\item {frase_campana} Costó
-{uso["agentes"]["llamadas"] + uso["juez"]["llamadas"]} llamadas a los modelos y
-{uso["segundos"] / 60:.0f} minutos.
-\end{{itemize}}
-
-\begin{{center}}\small
-\begin{{tabular}}{{llccl}}
+\begin{{center}}
+\begin{{tabular}}{{llccc}}
 \toprule
-ruta & tipo de caso & trayectoria & aprobadas & peor ejecución \\
+& qué prueba & aprobó & camino bien & respuesta bien \\
 \midrule
-{resumen_rutas}
+{tabla_rutas}
 \bottomrule
 \end{{tabular}}
 \end{{center}}
+{{\small R6 es un caso extra y no cuenta en el 9 de 15.\par}}
 
-Lo que más se repite:
-\begin{{itemize}}[nosep]
-{patrones}
+\begin{{itemize}}[nosep,leftmargin=*]
+{puntos("aprendizajes")}
 \end{{itemize}}
 
-Los números salen de \texttt{{reports/campanas/{tex(meta["campana"])}/resultados.json}},
-que escribe el ejecutable. Cuento todas las ejecuciones: no escogí ni reemplacé
-ninguna.
+\section*{{El sistema}}
 
-\section{{El sistema}}
+Es un \textbf{{supervisor con agentes como herramientas, dentro de un grafo de
+control}}. El supervisor (A0) decide a quién consultar: A1 lee noticias, A2 analiza
+el reporte financiero y A3 calcula sobre el portafolio. Si A0 propone una compra, el
+grafo la manda siempre a A4, el de riesgo, y luego la valida en código: ninguna
+aprobación puede saltarse un límite. Si la compra cumple, no se ejecuta, queda para
+que una persona decida.
 
-Es un sistema de tipo \textbf{{supervisor con agentes como herramientas, dentro de un
-grafo de control determinista}}. Antes de programarlo comparé cuatro patrones:
-
-\begin{{itemize}}[nosep]
-\item \textbf{{Supervisor}}, la base: un agente central decide qué especialistas
-consultar y solo activa los que hacen falta.
-\item \textbf{{Grafo de control}}, alrededor del supervisor: impone los pasos que no
-pueden quedar a criterio de un modelo, como la revisión de riesgo y la validación.
-\item \textbf{{Paralelo}}: útil para consultas independientes, pero no lo usé en esta
-versión. Todo corre de uno en uno, y la traza queda en orden.
-\item \textbf{{Enjambre}}, descartado: que los agentes se pasen el control entre ellos
-agrega variación y ciclos que un comité de inversión no necesita.
-\end{{itemize}}
-
-Por eso las flechas del diagrama son tareas y respuestas, no traspasos de control.
-El supervisor, A0, no consulta datos ni calcula: llama a A1 (noticias), A2
-(finanzas) y A3 (portafolio) como si fueran herramientas, les pasa una tarea y
-recibe su respuesta estructurada. Cada especialista solo puede usar sus propias
-herramientas y empieza sin memoria en cada invocación. Si A0 propone una
-operación, el grafo siempre consulta a A4 (riesgo) y luego valida la propuesta en
-código, donde ninguna aprobación puede anular un límite duro. Toda llamada a
-herramienta pasa por la Mesa, que revisa permisos, descuenta presupuesto y deja
-traza. No hay forma de ejecutar operaciones: una propuesta válida queda pendiente
-de que una persona decida.
-
-\begin{{center}}\small
-\begin{{tabular}}{{llL{{9.2cm}}l}}
-\toprule
-agente & papel & herramientas & salida \\
-\midrule
-{agentes}
-\bottomrule
-\end{{tabular}}
-\end{{center}}
-
-\textbf{{Configuración.}} Agentes: \texttt{{{tex(modelos["agentes"])}}}; juez:
-\texttt{{{tex(modelos["juez"])}}}, otro modelo. Sin temperatura y con razonamiento
-\texttt{{{tex(modelos["razonamiento"])}}}. Por caso, como máximo
-{limites.herramientas_por_especialista} herramientas por invocación,
-{limites.invocaciones_especialistas} invocaciones, {limites.llamadas_modelo} llamadas
-al modelo y {limites.timeout_caso_s}~s. Versiones: {tex(", ".join(f"{k} {v}" for k, v in meta["versiones"].items()))};
-Python {tex(meta["python"])}.
-
-El diagrama está en la página \pageref{{fig:diagrama}} y en
-\texttt{{reports/diagrama\_arquitectura.pdf}}.
+Lo elegí sobre un enjambre, donde los agentes se pasan el control entre ellos,
+porque así el camino es predecible. Los modelos deciden e interpretan, pero el
+código calcula y controla. El diagrama está en la página \pageref{{fig:diagrama}}.
 
 \begin{{figure}}[p]
 \centering
 \includegraphics[angle=90,height=0.9\textheight]{{{DIAGRAMA.as_posix()}}}
-\caption{{Arquitectura: supervisor con agentes como herramientas dentro del grafo de
-control.}}
+\caption{{Arquitectura del sistema.}}
 \label{{fig:diagrama}}
 \end{{figure}}
 
-\section{{Cómo lo evalué}}
+\section*{{Cómo lo evalué}}
 
-\begin{{itemize}}
-\item \textbf{{La evaluación es a priori.}} La definí en el documento de plan antes de
-programar el sistema: cinco rutas, una por tipo de caso de la rúbrica, cada una
-con sus cinco campos (entrada, trayectoria esperada con argumentos, resultado
-esperado con tolerancia, criterio de trayectoria y criterio de resultado). Los
-esperados los calculé a mano con los datos ficticios, y los copié al código como
-una clave separada que ningún agente ve.
-\item \textbf{{Antes de correr}} probé el evaluador con 23 trazas con defectos
-plantados y congelé el archivo (SHA-256
-\texttt{{{tex(meta["archivo_sha256"][:16])}}}…); la campaña comprueba que no cambió.
-\item \textbf{{Cada ejecución se mide en tres planos}}: la trayectoria (qué agentes y
-herramientas, con qué argumentos y en qué orden), el resultado (exacto, con
-tolerancia o con juez) y los controles. Aprueba solo si pasan los tres.
-\item \textbf{{Métricas.}} Cobertura es herramientas correctas sobre esperadas (lo
-que la rúbrica llama precisión); precisión es correctas sobre realizadas. Además,
-eventos reales contra esperados, pasos extra, cifras sin respaldo y acciones
-prohibidas.
-\item \textbf{{Tres repeticiones por ruta}}, cada una desde cero. Reporto la tasa de
-aprobación y la peor ejecución de cada ruta.
+\begin{{itemize}}[leftmargin=*]
+\item \textbf{{Antes de programar}} escribí los cinco casos, uno por cada tipo que
+pide la rúbrica, y R6 como extra. Cada uno tiene la pregunta, el camino esperado
+(qué agentes y herramientas, con qué datos), la respuesta esperada y cómo se
+comparan. Los valores los calculé a mano; los agentes nunca los ven.
+\item \textbf{{Antes de correr}} probé el evaluador con 23 casos con errores
+plantados y congelé el código, para no poder cambiar nada después.
+\item \textbf{{Una ruta aprueba}} si el camino está bien, la respuesta está bien y
+no hubo acciones prohibidas. Cuento las tres corridas de cada ruta.
+\item \textbf{{Métricas}}: \emph{{herramientas correctas}} es el porcentaje de las
+herramientas esperadas que usó con los datos correctos (lo que la rúbrica llama
+precisión), y \emph{{pasos}} es cuántos dio contra los que esperaba.
 \end{{itemize}}
 
-\section{{Las rutas obligatorias}}
-{"".join(seccion_ruta(r, claves[r["ruta"]], analisis["fallas"]) for r in rutas_ob)}
+\section*{{Ruta por ruta}}
+{"".join(seccion_ruta(r, claves[r["ruta"]], analisis.get("fallas", {})) for r in rutas)}
 
-\section{{Ruta complementaria}}
-R6 va aparte y no entra en las 15 obligatorias.
-{"".join(seccion_ruta(r, claves[r["ruta"]], analisis["fallas"]) for r in rutas_comp)}
+\section*{{El juez}}
 
-\section{{El juez}}
+{seccion_juez(resumen, revision, modelos["juez"])}
 
-J1 y J2 son llamadas aparte a \texttt{{{tex(modelos["juez"])}}}, sin herramientas y con
-los criterios escritos en el código. La ruta aprueba solo si se cumplen los tres;
-si el juez no responde o devuelve algo inválido, el juicio queda sin completar y no
-cuenta como aprobado.
+\section*{{Qué sigue}}
 
-El juez comparte proveedor con los agentes y es un modelo chico, así que puede
-equivocarse o premiar cierta redacción. Por eso no lo uso para números, y contrasté
-sus juicios con mi revisión.
-
-\section{{Revisión humana}}
-
-{seccion_revision(revision)}
-
-\section{{Otras campañas}}
-
-No borré ninguna campaña. La primera, con \texttt{{gemini-3.6-flash}}, se cortó por
-cuota: ese modelo permite 20 llamadas al día y la campaña necesitaba unas 150. La
-conservo, y para la oficial cambié a los modelos Flash Lite, que permiten 500.
-
-{seccion_anteriores(carpeta)}
-
-\section{{Limitaciones}}
-
-\begin{{itemize}}
-\item Tres repeticiones muestran variación, pero no miden la confiabilidad en
-producción.
-\item Agentes y juez son modelos chicos de un mismo proveedor; uno mayor
-probablemente fallaría menos.
-\item El detector de cifras confundió la zona horaria de una fecha con una cifra y
-reprobó R4.1 y R4.2. Lo reporto tal cual: corregirlo exige una campaña nueva.
-\item La regla de cifras con respaldo es estricta: reprueba una cifra correcta que el
-modelo calculó por su cuenta, como el 800 de R5.3.
-\item No fijé la temperatura, porque la guía de Gemini 3 recomienda no bajarla; por
-eso hay variación entre repeticiones.
-\item Los datos son ficticios. El sistema no mide rentabilidad ni ejecuta
-operaciones.
+\begin{{itemize}}[nosep,leftmargin=*]
+{puntos("siguiente")}
 \end{{itemize}}
 
-\section{{Cómo reproducirlo}}
+\section*{{Notas}}
 
-Con las dependencias del comentario inicial y la variable \texttt{{GOOGLE\_API\_KEY}}:
-
-\begin{{itemize}}[nosep]
-\item \texttt{{python proyecto\_multiagente.py}} corre la campaña e imprime la tabla.
-\item \texttt{{python proyecto\_multiagente.py --tabla}} la vuelve a imprimir sin
-llamar a los modelos.
-\item \texttt{{python proyecto\_multiagente.py --probar-evaluador}} corre las pruebas
-del evaluador, sin red.
-\end{{itemize}}
-
-Como los modelos no tienen temperatura 0, otra corrida puede dar otras
-trayectorias. Los números de este documento son los de la campaña
-\texttt{{{tex(meta["campana"])}}}.
+{{\small Agentes: \texttt{{{tex(modelos["agentes"])}}}; juez:
+\texttt{{{tex(modelos["juez"])}}}. La campaña \texttt{{{tex(meta["campana"])}}}
+coincide con la congelación y costó {uso["agentes"]["llamadas"] + uso["juez"]["llamadas"]}
+llamadas a los modelos. {nota_campanas(carpeta)} Todos los números salen de
+\texttt{{resultados.json}}, que escribe el ejecutable, y ahí está el detalle completo
+de cada ejecución. Para reproducirlo: \texttt{{python proyecto\_multiagente.py}}, con
+la variable \texttt{{GOOGLE\_API\_KEY}}. Como los modelos no tienen temperatura 0,
+otra corrida puede dar otros caminos.\par}}
 
 \end{{document}}
 """
