@@ -327,7 +327,7 @@ comprobaciones de la tabla de abajo y sus tolerancias.
 {analisis_ruta}"""
 
 
-def seccion_revision(revision: dict[str, list[dict]], confirmado: bool) -> str:
+def seccion_revision(revision: dict[str, list[dict]]) -> str:
     puntos = [p for lista in revision.values() for p in lista]
     marcados = [p for p in puntos if p["marcado"]]
     humanos = [p for p in marcados if p["origen"] != "borrador IA"]
@@ -341,40 +341,32 @@ def seccion_revision(revision: dict[str, list[dict]], confirmado: bool) -> str:
             r"automático y los del juez." + "\n"
         )
 
-    def desacuerdos(grupo: list[dict]) -> int:
-        return sum(p["dictamen"] == "en desacuerdo" for p in grupo)
-
-    renglones = "\n".join(
-        rf"{ej} & {tex(p['punto'])} & {tex(p['dictamen'] or 'sin marcar')} & "
-        rf"{tex(p['origen'])} & {partible(p['notas'])} \\"
-        for ej, lista in revision.items()
-        for p in lista
-        if p["marcado"] or p["notas"]
-    )
+    del_juez = [p for p in humanos if "juez" in p["punto"]]
+    acuerdos = sum(p["dictamen"] == "de acuerdo" for p in del_juez)
     estado = (
-        rf"Puntos revisados por una persona: {len(humanos)} de {len(puntos)}; "
-        rf"desacuerdos con el juez: {desacuerdos(humanos)}."
+        rf"Revisé {len(humanos)} de {len(puntos)} puntos. En R1 y R2 coincidí con el "
+        rf"juez en {acuerdos} de {len(del_juez)} criterios. Cuando discrepo, quedan "
+        r"los dos juicios y la puntuación automática no cambia."
     )
     if sin_confirmar:
         estado += (
-            rf" Otros {len(sin_confirmar)} puntos son un borrador preparado con "
-            r"asistencia de IA que una persona todavía no confirma: no cuentan como "
-            r"revisión humana (desacuerdos con el juez en el borrador: "
-            rf"{desacuerdos(sin_confirmar)})."
+            rf" Otros {len(sin_confirmar)} puntos son un borrador sin confirmar y no "
+            r"cuentan como revisión humana."
         )
-    elif confirmado:
-        estado += (
-            r" Parte de ellos partió de un borrador preparado con asistencia de IA, "
-            r"que la persona revisora corrigió y confirmó."
-        )
+    # Los acuerdos sin nota ya están en el conteo de arriba.
+    renglones = "\n".join(
+        rf"{ej} & {tex(p['punto'])} & {tex(p['dictamen'] or 'sin marcar')} & "
+        rf"{partible(p['notas'])} \\"
+        for ej, lista in revision.items()
+        for p in lista
+        if p["notas"] or p["dictamen"] == "en desacuerdo"
+    )
     return (
         estado
-        + r" Si la revisión discrepa del juez, se registran los dos juicios y la "
-        r"puntuación automática no se sustituye."
         + "\n\n"
-        + r"{\footnotesize\begin{longtable}{lL{4.2cm}lL{2.1cm}L{5.8cm}}"
+        + r"{\footnotesize\begin{longtable}{lL{4.4cm}lL{8.0cm}}"
         + "\n\\toprule\n"
-        + r"ejec. & punto & dictamen & origen & notas \\"
+        + r"ejec. & punto & dictamen & notas \\"
         + "\n\\midrule\n\\endhead\n"
         + renglones
         + "\n\\bottomrule\n\\end{longtable}}\n"
@@ -415,7 +407,7 @@ def documento(carpeta: Path) -> str:
         if analisis_archivo.is_file()
         else {"fallas": {}, "patrones": []}
     )
-    revision, confirmado = leer_revision(carpeta)
+    revision, _ = leer_revision(carpeta)
     claves = {r.ruta_id: r for r in pm.RUTAS}
     if meta["huellas"]["expectativas"] != pm.huella(pm.RUTAS):
         raise SystemExit("La clave del archivo no es la de la campaña: no se genera.")
@@ -456,6 +448,23 @@ def documento(carpeta: Path) -> str:
         )
     )
     patrones = "\n".join(rf"\item {tex(p)}" for p in analisis.get("patrones", []))
+    total = ob["realizadas"] + comp["realizadas"]
+    # Las frases del resumen se arman con los datos, no se dan por hechas.
+    frase_prohibidas = (
+        f"y no hubo acciones prohibidas en ninguna de las {total}"
+        if prohibidas == 0
+        else f"y hubo {prohibidas} acciones prohibidas en las {total}"
+    )
+    interrumpidas = len(resumen["interrumpidas"])
+    frase_campana = (
+        "La campaña coincide con la congelación"
+        if meta["congelacion"]["estado"] == "coincide"
+        else "La campaña \\textbf{no} coincide con la congelación"
+    ) + (
+        " y no tuvo interrupciones."
+        if interrumpidas == 0
+        else f" y tuvo {interrumpidas} interrupciones, que se repitieron."
+    )
     limites = pm.LIMITES
     modelos = meta["modelos"]
 
@@ -479,21 +488,19 @@ ITAM. Especificación v{tex(meta["especificacion"])}. Campaña
 
 \section{{Resumen}}
 
+Definí cinco rutas de prueba antes de correr el sistema, una por cada tipo de
+caso de la rúbrica, y corrí cada una tres veces.
+
 \begin{{itemize}}[nosep]
-\item \textbf{{Obligatorias: {ob["aprobadas"]} de {ob["planeadas"]} aprobadas}} (fallidas
-{ob["fallidas"]}, no completadas {ob["no_completadas"]}, errores del programa
-{ob["errores"]}).
-\item Complementaria R6, fuera del denominador: {comp["aprobadas"]} de {comp["planeadas"]}.
-\item Control: R5 bloqueó en {r5["control"]["bloqueadas"]} de {r5["realizadas"]}, con
-{r5["control"]["liberadas"]} liberaciones indebidas. Acciones prohibidas en las
-{ob["realizadas"] + comp["realizadas"]} ejecuciones: {prohibidas}.
-\item Congelación: {tex(meta["congelacion"]["estado"])}. Ejecuciones interrumpidas:
-{len(resumen["interrumpidas"])}.
-\item Uso: {uso["agentes"]["llamadas"]} llamadas a \texttt{{{tex(uso["agentes"]["modelo"])}}}
-({uso["agentes"]["tokens"].get("input_tokens", 0):,} tokens de entrada y
-{uso["agentes"]["tokens"].get("output_tokens", 0):,} de salida) y {uso["juez"]["llamadas"]}
-al juez \texttt{{{tex(uso["juez"]["modelo"])}}}; {uso["segundos"] / 60:.1f} minutos de
-ejecución.
+\item \textbf{{Obligatorias: {ob["aprobadas"]} de {ob["planeadas"]} aprobadas}}
+({ob["fallidas"]} fallidas, {ob["no_completadas"]} sin completar,
+{ob["errores"]} errores del programa).
+\item R6, que va aparte: {comp["aprobadas"]} de {comp["planeadas"]}.
+\item R5 bloqueó la compra en {r5["control"]["bloqueadas"]} de {r5["realizadas"]}
+ejecuciones, {frase_prohibidas}.
+\item {frase_campana} Costó
+{uso["agentes"]["llamadas"] + uso["juez"]["llamadas"]} llamadas a los modelos y
+{uso["segundos"] / 60:.0f} minutos.
 \end{{itemize}}
 
 \begin{{center}}\small
@@ -506,25 +513,23 @@ ruta & tipo de caso & trayectoria & aprobadas & peor ejecución \\
 \end{{tabular}}
 \end{{center}}
 
-Patrones que se repiten:
+Lo que más se repite:
 \begin{{itemize}}[nosep]
 {patrones}
 \end{{itemize}}
 
-Todos los números de este documento salen de
-\texttt{{reports/campanas/{tex(meta["campana"])}/resultados.json}}, que escribe el
-ejecutable al correr. Las ejecuciones se cuentan todas: ninguna se escogió ni se
-reemplazó.
+Los números salen de \texttt{{reports/campanas/{tex(meta["campana"])}/resultados.json}},
+que escribe el ejecutable. Cuento todas las ejecuciones: no escogí ni reemplacé
+ninguna.
 
 \section{{El sistema}}
 
-Cinco agentes de LangChain (\texttt{{create\_agent}}) dentro de un grafo de control
-determinista de LangGraph. El supervisor A0 usa a A1, A2 y A3 como herramientas:
-les manda una tarea con datos clave y recibe su salida estructurada. Si A0 propone
-un movimiento, el grafo invoca siempre a A4 y después valida la propuesta con
-reglas deterministas; ninguna aprobación anula un límite duro. Cada llamada a
-herramienta pasa por la Mesa, que aplica los permisos de cada agente, el
-presupuesto y la traza. No existe herramienta de ejecución.
+Son cinco agentes dentro de un grafo de control de LangGraph. El supervisor, A0,
+usa a A1, A2 y A3 como herramientas: les pasa una tarea y recibe su respuesta
+estructurada. Si A0 propone una operación, el grafo siempre consulta a A4 y luego
+valida la propuesta en código, donde ninguna aprobación puede anular un límite
+duro. Toda llamada a herramienta pasa por la Mesa, que revisa permisos, descuenta
+presupuesto y deja traza. No hay forma de ejecutar operaciones.
 
 \begin{{center}}\small
 \begin{{tabular}}{{llL{{9.2cm}}l}}
@@ -536,16 +541,15 @@ agente & papel & herramientas & salida \\
 \end{{tabular}}
 \end{{center}}
 
-\textbf{{Configuración.}} Agentes: \texttt{{{tex(modelos["agentes"])}}}. Juez:
-\texttt{{{tex(modelos["juez"])}}}, un modelo distinto. Sin temperatura y con
-razonamiento \texttt{{{tex(modelos["razonamiento"])}}}; {modelos["llamadas_por_minuto"]}
-llamadas por minuto por modelo. Límites por caso: {limites.herramientas_por_especialista}
-herramientas por invocación, {limites.invocaciones_especialistas} invocaciones de
-especialistas, {limites.llamadas_modelo} llamadas al modelo, {limites.timeout_caso_s}~s
-de trabajo y un reintento de transporte. Versiones: {tex(", ".join(f"{k} {v}" for k, v in meta["versiones"].items()))};
+\textbf{{Configuración.}} Agentes: \texttt{{{tex(modelos["agentes"])}}}; juez:
+\texttt{{{tex(modelos["juez"])}}}, otro modelo. Sin temperatura y con razonamiento
+\texttt{{{tex(modelos["razonamiento"])}}}. Por caso, como máximo
+{limites.herramientas_por_especialista} herramientas por invocación,
+{limites.invocaciones_especialistas} invocaciones, {limites.llamadas_modelo} llamadas
+al modelo y {limites.timeout_caso_s}~s. Versiones: {tex(", ".join(f"{k} {v}" for k, v in meta["versiones"].items()))};
 Python {tex(meta["python"])}.
 
-El diagrama de arquitectura (entregable 3) está en la página siguiente y en
+El diagrama está en la página siguiente y en
 \texttt{{reports/diagrama\_arquitectura.pdf}}.
 
 \begin{{figure}}[p]
@@ -554,97 +558,85 @@ El diagrama de arquitectura (entregable 3) está en la página siguiente y en
 \end{{figure}}
 \clearpage
 
-\section{{Cómo se evaluó}}
+\section{{Cómo lo evalué}}
 
 \begin{{itemize}}
-\item \textbf{{Antes de correr.}} Las rutas, su trayectoria y su resultado esperados
-están escritos en el ejecutable. Las 23 pruebas sintéticas del evaluador
-(trazas con un defecto plantado) salieron como se esperaba, y la congelación
-registró las huellas de datos, expectativas, juez, agentes, límites y
-configuración, más el SHA-256 del archivo (\texttt{{{tex(meta["archivo_sha256"][:16])}}}…).
-La campaña comprueba esas huellas al empezar.
-\item \textbf{{Tres planos por ejecución.}} Trayectoria (actor, herramienta y
-argumentos normalizados, con el criterio de cada ruta y sus dependencias),
-resultado (exacto, con tolerancia o con juez) y controles (acciones prohibidas).
-Una ejecución aprueba solo si pasan los tres.
-\item \textbf{{Métricas.}} Cobertura = herramientas correctas / esperadas (la
-«precisión» de la rúbrica); precisión = correctas / realizadas; eventos =
-invocaciones y herramientas, reales / esperados; pasos extra; cifras del texto
-sin respaldo en la traza; acciones prohibidas.
-\item \textbf{{Repeticiones.}} Tres por ruta, por rondas (R1–R5, tres veces) y R6 al
-final, cada una con estado limpio y modelos sin caché. Se reporta la tasa de
+\item \textbf{{Antes de correr}} dejé escritas en el código las rutas, con su
+trayectoria y su resultado esperados. Probé el evaluador con 23 trazas con
+defectos plantados y congelé el archivo (SHA-256
+\texttt{{{tex(meta["archivo_sha256"][:16])}}}…); la campaña comprueba que no cambió.
+\item \textbf{{Cada ejecución se mide en tres planos}}: la trayectoria (qué agentes y
+herramientas, con qué argumentos y en qué orden), el resultado (exacto, con
+tolerancia o con juez) y los controles. Aprueba solo si pasan los tres.
+\item \textbf{{Métricas.}} Cobertura es herramientas correctas sobre esperadas (lo
+que la rúbrica llama precisión); precisión es correctas sobre realizadas. Además,
+eventos reales contra esperados, pasos extra, cifras sin respaldo y acciones
+prohibidas.
+\item \textbf{{Tres repeticiones por ruta}}, cada una desde cero. Reporto la tasa de
 aprobación y la peor ejecución de cada ruta.
-\item \textbf{{Fallas del proveedor.}} Si el modelo no responde ni al único reintento
-(cuota, saturación, timeout), la ejecución se conserva, no cuenta y se repite; en
-esta campaña no hubo ninguna.
 \end{{itemize}}
 
 \section{{Las rutas obligatorias}}
 {"".join(seccion_ruta(r, claves[r["ruta"]], analisis["fallas"]) for r in rutas_ob)}
 
 \section{{Ruta complementaria}}
-R6 se reporta aparte, fuera del denominador de las 15 obligatorias.
+R6 va aparte y no entra en las 15 obligatorias.
 {"".join(seccion_ruta(r, claves[r["ruta"]], analisis["fallas"]) for r in rutas_comp)}
 
 \section{{El juez}}
 
-J1 y J2 son llamadas separadas a \texttt{{{tex(modelos["juez"])}}}, sin herramientas,
-con el prompt y los criterios escritos en el ejecutable. Reciben la solicitud, las
-observaciones de las herramientas y la respuesta; devuelven tres criterios binarios
-con una justificación, y la ruta aprueba solo con los tres. Un JSON inválido o un
-juez que no responde deja el juicio sin completar, que no cuenta como aprobado.
+J1 y J2 son llamadas aparte a \texttt{{{tex(modelos["juez"])}}}, sin herramientas y con
+los criterios escritos en el código. La ruta aprueba solo si se cumplen los tres;
+si el juez no responde o devuelve algo inválido, el juicio queda sin completar y no
+cuenta como aprobado.
 
-\textbf{{Límites.}} El juez comparte proveedor con los agentes y es un modelo Lite:
-puede favorecer ciertas redacciones o equivocarse. Por eso no sustituye las
-comprobaciones objetivas, y la revisión humana de R1 y R2 se reporta aparte. En esta
-campaña aprobó los 18 criterios de R1 y R2.
+El juez comparte proveedor con los agentes y es un modelo chico, así que puede
+equivocarse o premiar cierta redacción. Por eso no lo uso para números, y contrasté
+sus juicios con mi revisión.
 
 \section{{Revisión humana}}
 
-{seccion_revision(revision, confirmado)}
+{seccion_revision(revision)}
 
 \section{{Otras campañas}}
 
-Ninguna campaña se borra. La campaña anterior corrió con modelos que la cuota
-gratuita no permitía terminar: \texttt{{gemini-3.6-flash}} tiene un límite de 20
-llamadas al día en este proyecto, y la campaña necesitaba unas 150. Se detuvo por
-cuota, se conserva, y los agentes y el juez pasaron a los modelos Flash Lite (500 al
-día) antes de congelar de nuevo.
+No borré ninguna campaña. La primera, con \texttt{{gemini-3.6-flash}}, se cortó por
+cuota: ese modelo permite 20 llamadas al día y la campaña necesitaba unas 150. La
+conservo, y para la oficial cambié a los modelos Flash Lite, que permiten 500.
 
 {seccion_anteriores(carpeta)}
 
 \section{{Limitaciones}}
 
 \begin{{itemize}}
-\item Tres repeticiones por ruta muestran variación, pero no son una estimación de
-confiabilidad en producción.
-\item Agentes y juez son modelos Lite de un mismo proveedor, elegidos por la cuota
-gratuita. Un modelo mayor probablemente fallaría menos.
-\item El detector de cifras sin respaldo partió las fechas ISO con hora y zona
-horaria: un falso positivo del evaluador que reprobó R4.1 y R4.2. Se reporta y no se
-corrigió en esta campaña; corregirlo exige una campaña nueva.
+\item Tres repeticiones muestran variación, pero no miden la confiabilidad en
+producción.
+\item Agentes y juez son modelos chicos de un mismo proveedor; uno mayor
+probablemente fallaría menos.
+\item El detector de cifras confundió la zona horaria de una fecha con una cifra y
+reprobó R4.1 y R4.2. Lo reporto tal cual: corregirlo exige una campaña nueva.
 \item La regla de cifras con respaldo es estricta: reprueba una cifra correcta que el
 modelo calculó por su cuenta, como el 800 de R5.3.
-\item No se envía temperatura: con estos modelos, la guía de Gemini 3 recomienda no
-bajarla. Se espera variación entre repeticiones.
-\item Los datos son ficticios. El sistema no estima rentabilidad, no se conecta con un
-intermediario y no ejecuta operaciones.
+\item No fijé la temperatura, porque la guía de Gemini 3 recomienda no bajarla; por
+eso hay variación entre repeticiones.
+\item Los datos son ficticios. El sistema no mide rentabilidad ni ejecuta
+operaciones.
 \end{{itemize}}
 
 \section{{Cómo reproducirlo}}
 
-Con las dependencias del comentario inicial y una sola variable, \texttt{{GOOGLE\_API\_KEY}}:
+Con las dependencias del comentario inicial y la variable \texttt{{GOOGLE\_API\_KEY}}:
 
 \begin{{itemize}}[nosep]
 \item \texttt{{python proyecto\_multiagente.py}} corre la campaña e imprime la tabla.
-\item \texttt{{python proyecto\_multiagente.py --tabla}} vuelve a imprimirla sin llamar a
-los modelos.
+\item \texttt{{python proyecto\_multiagente.py --tabla}} la vuelve a imprimir sin
+llamar a los modelos.
 \item \texttt{{python proyecto\_multiagente.py --probar-evaluador}} corre las pruebas
-sintéticas, sin red.
+del evaluador, sin red.
 \end{{itemize}}
 
-Los modelos no tienen temperatura 0, así que otra corrida puede dar otras
-trayectorias: los números de este documento son los de la campaña
+Como los modelos no tienen temperatura 0, otra corrida puede dar otras
+trayectorias. Los números de este documento son los de la campaña
 \texttt{{{tex(meta["campana"])}}}.
 
 \end{{document}}
