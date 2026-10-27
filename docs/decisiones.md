@@ -5,8 +5,8 @@ el diseño, pero implementarlo obliga a precisar detalles que el documento no
 fija, y en dos casos a cambiar una decisión (D22, que luego reemplaza D47).
 Las decisiones D36 a D46, del Bloque 4, fijan cómo el evaluador compara
 trayectorias y resultados. D47 a D50 cambian el proveedor a Gemini, por su
-capa gratuita. D51 a D56, del Bloque 5, fijan cómo se corre la campaña, qué
-cuenta en ella y el modelo juez definitivo. Todas se registran **antes**
+capa gratuita. D51 a D57, del Bloque 5, fijan cómo se corre la campaña, qué
+cuenta en ella y los modelos definitivos. Todas se registran **antes**
 de ejecutar cualquier ruta de la campaña, para que ninguna se pueda leer como
 un ajuste hecho después de ver resultados. Cuando una decisión de esta
 sección contradice una anterior del documento, prevalece la de esta sección.
@@ -764,6 +764,52 @@ de D47.
 - *Pruebas.* Con 3.8, la mutación `temperature=0` solo la atrapaba la prueba
   del juez. 3.5 Flash Lite también la quita con un aviso, así que ningún
   modelo del sistema la enviaría.
+
+**D57. Agentes y juez en los Flash Lite de Gemini 3, por la cuota diaria.**
+Nueva; cambia los modelos de D47 y D56, y el ritmo de D50.
+- *Lo que mostró la primera campaña.* La campaña 20261027-142643 corrió con
+  gemini-3.6-flash y coincidía con la congelación.
+  - R1.1 y R2.1 aprobaron, con 5 y 11 llamadas.
+  - En R3.1, Google devolvió 429 `GenerateRequestsPerDayPerProjectPerModel-
+    FreeTier`, con un límite de 20. Se interrumpió y la campaña se detuvo
+    (D52).
+  - Hubo además cuatro 503 de saturación, y el único reintento resolvió cada
+    uno.
+
+  La campaña se conserva como evidencia y se reporta como detenida por la
+  cuota.
+- *Los límites del proyecto en AI Studio*, el 27 de octubre:
+
+  | Modelo | por minuto | por día |
+  |---|---|---|
+  | gemini-3.6-flash | 5 | 20 |
+  | gemini-3.8-flash | 5 | 20 |
+  | gemini-3.5-flash-lite | 15 | 500 |
+  | gemini-3.1-flash-lite | 15 | 500 |
+
+  Con 20 al día, una campaña de unas 150 llamadas tomaría ocho días. Además,
+  el ritmo de 8 por minuto estaba por encima del límite de 3.6 Flash.
+- *Agentes: gemini-3.5-flash-lite. Juez: gemini-3.1-flash-lite.* Son los
+  únicos modelos de texto con 500 diarias. Siguen siendo distintos entre sí,
+  así que el juez no califica salidas de su mismo modelo.
+  - langchain-google-genai 4.4.2 trata a 3.5 Flash Lite como a 3.6 Flash:
+    sin temperatura propia y con razonamiento `medium`.
+  - 3.1 Flash Lite acepta `medium`, y la petición se arma igual.
+- *Temperatura.* 3.1 Flash Lite admite `temperature`, y la sección 3.1 pide 0
+  «cuando el modelo la admita». No se envía de todos modos, porque la guía de
+  Gemini 3 pide no bajarla de su valor por omisión: puede degradar la
+  respuesta. Es una desviación de la letra de la sección 3.1, y la
+  configuración queda igual para los dos modelos.
+- *Ritmo: 12 llamadas por minuto por modelo*, debajo de las 15 de los Flash
+  Lite.
+- *Límite.* Los dos son modelos Lite, más chicos que el que se había elegido.
+  Es probable que fallen más rutas que con 3.6 Flash. La rúbrica califica la
+  evaluación, no que el agente acierte en las cinco, y cada falla se analiza.
+  Con un juez Lite pesa más la revisión humana de R1 y R2.
+- *Congelación.* Cambiar los modelos cambia la huella de configuración, así
+  que hace falta otra congelación. `--congelar` ya no sobrescribe la
+  anterior: la conserva con su fecha en el nombre, porque la campaña de 3.6
+  Flash depende de ella.
 
 ---
 

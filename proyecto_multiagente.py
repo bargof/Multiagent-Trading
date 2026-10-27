@@ -114,21 +114,22 @@ VERSIONES_FIJADAS = {
 }
 
 # Un solo proveedor, Gemini, por su capa gratuita (decisión D47, que
-# reemplaza a D22). Los agentes usan 3.6 Flash, que langchain-google-genai
-# 4.4.2 trata de forma explícita. El juez usa 3.5 Flash Lite: comparte
-# proveedor con los agentes, pero no califica salidas de su mismo modelo. Era
-# 3.8 Flash, que no respondió en ninguna verificación (decisión D56).
-MODELO_AGENTES = "gemini-3.6-flash"
-MODELO_JUEZ = "gemini-3.5-flash-lite"
-# Gemini 3.6 en adelante ya no admite temperature, y la sección 3.1 pide 0
-# «cuando el modelo la admita»: no se envía (decisión D48).
+# reemplaza a D22). Agentes y juez usan los dos Flash Lite de Gemini 3, los
+# únicos de la capa gratuita con 500 llamadas diarias; 3.6 Flash tenía 20
+# (decisión D57). Son modelos distintos: el juez comparte proveedor con los
+# agentes, pero no califica salidas de su mismo modelo.
+MODELO_AGENTES = "gemini-3.5-flash-lite"
+MODELO_JUEZ = "gemini-3.1-flash-lite"
+# 3.5 Flash Lite no admite temperature. 3.1 Flash Lite sí, pero la guía de
+# Gemini 3 pide no bajarla de su valor por omisión. No se envía a ninguno
+# (decisiones D48 y D57).
 TEMPERATURA = None
 # Fijado en vez de heredar el predeterminado del proveedor, que podría
 # cambiar entre campañas. Google recomienda "medium" para agentes.
 RAZONAMIENTO = "medium"
-# Por modelo, debajo del límite por minuto de la capa gratuita (decisión
-# D50). El límite real del proyecto se ve en AI Studio; GEMINI_RPM lo ajusta.
-LLAMADAS_POR_MINUTO = 8
+# Por modelo, debajo del límite por minuto de la capa gratuita: 15 para los
+# Flash Lite en AI Studio (decisiones D50 y D57). GEMINI_RPM lo ajusta.
+LLAMADAS_POR_MINUTO = 12
 REPETICIONES_POR_RUTA = 3
 
 # La key es de Google AI Studio. langchain-google-genai lee GOOGLE_API_KEY y,
@@ -5342,6 +5343,21 @@ def modelos_de(config: Configuracion) -> dict[str, Any]:
     }
 
 
+def archivar_congelacion() -> Path | None:
+    """Una congelación nueva no borra la anterior: una campaña ya corrida
+    puede depender de ella. Queda al lado, con su fecha en el nombre."""
+    if not RUTA_CONGELACION.is_file():
+        return None
+    fecha = json.loads(RUTA_CONGELACION.read_text(encoding="utf-8")).get("fecha")
+    sello = (fecha or "anterior")[:19].replace(":", "")
+    destino, n = RUTA_CONGELACION.with_name(f"congelacion-{sello}.json"), 1
+    while destino.exists():
+        n += 1
+        destino = RUTA_CONGELACION.with_name(f"congelacion-{sello}-{n}.json")
+    RUTA_CONGELACION.replace(destino)
+    return destino
+
+
 def congelacion(
     config: Configuracion, pruebas: list[ResultadoPrueba]
 ) -> dict[str, Any]:
@@ -6468,6 +6484,8 @@ def main() -> int:
         if args.congelar:
             RUTA_CONGELACION.parent.mkdir(exist_ok=True)
             registro = congelacion(config, pruebas)
+            if anterior := archivar_congelacion():
+                print(f"\n  La congelación anterior queda en {anterior}")
             RUTA_CONGELACION.write_text(
                 json.dumps(registro, ensure_ascii=False, indent=2), encoding="utf-8"
             )

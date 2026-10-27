@@ -32,8 +32,8 @@ campaña están probados con un cliente falso, sin red ni cuota.
 ## Configurar la API key
 
 Hay una variable obligatoria, `GOOGLE_API_KEY`, con una key de la API de
-Gemini (decisión D47). La usan los agentes A0–A4 (gemini-3.6-flash) y el juez
-J1/J2 (gemini-3.5-flash-lite). El juez es otro modelo para no calificar salidas
+Gemini (decisión D47). La usan los agentes A0–A4 (gemini-3.5-flash-lite) y el juez
+J1/J2 (gemini-3.1-flash-lite). El juez es otro modelo para no calificar salidas
 del suyo, aunque comparte proveedor.
 
 La key se crea gratis en [Google AI Studio](https://aistudio.google.com/apikey)
@@ -56,7 +56,7 @@ $env:GOOGLE_API_KEY = "..."
 ```
 
 **Cuota.** La capa gratuita limita las llamadas por minuto y por día, por
-modelo. Los límites de tu proyecto se ven en AI Studio. El sistema va a 8
+modelo. Los límites de tu proyecto se ven en AI Studio. El sistema va a 12
 llamadas por minuto por modelo (`GEMINI_RPM` lo cambia). En esa capa, Google
 usa lo que recibe para mejorar sus productos; los datos del proyecto son
 ficticios. Ninguna prueba usa la key: `tests/conftest.py` la borra y corta la
@@ -113,7 +113,7 @@ juez, agentes, límites y configuración, más el SHA-256 del archivo.
 Sin opciones corre la campaña: R1–R5 tres veces, por rondas, y R6 tres veces
 aparte. Al terminar imprime la tabla de las rutas. Si los agentes siguieran
 las rutas de referencia serían 123 llamadas a los agentes y 6 al juez; con
-modelos reales serán más. A 8 llamadas por minuto, al menos 16 minutos.
+modelos reales serán más. A 12 llamadas por minuto, al menos 11 minutos.
 
 Si la cuota se acaba a mitad de campaña, la campaña se detiene. La ejecución
 cortada se conserva, no cuenta y se repite. Al volver a correr el mismo

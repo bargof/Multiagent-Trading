@@ -542,11 +542,28 @@ como fallida y la campaña seguía. Se cambió antes de correr ninguna ruta
 Con dos fallas seguidas del juez, se cambió a gemini-3.5-flash-lite antes de
 congelar (D56).
 
-`pytest`: 279 pasan.
+**Tercer `--verificar`, con el juez nuevo (27 de octubre).** Los dos modelos
+respondieron:
+- gemini-3.6-flash aceptó los 19 esquemas y llamó la herramienta, con 2972
+  tokens de entrada y 44 de salida;
+- gemini-3.5-flash-lite contestó «ok», con 9 de entrada y 133 de salida. La
+  mayoría de la salida es razonamiento, porque el nivel es `medium`.
+
+**Primera campaña, con gemini-3.6-flash** (20261027-142643), que
+coincidía con la congelación:
+- R1.1 y R2.1 aprobaron, con 5 y 11 llamadas;
+- cuatro 503 de saturación se resolvieron con su único reintento;
+- R3.1 se interrumpió por el límite diario de 20, y la campaña se detuvo.
+
+AI Studio mostró 500 llamadas diarias para los dos Flash Lite. Agentes y juez
+pasan a ellos, a 12 por minuto (D57). `--congelar` ahora conserva la
+congelación anterior (prueba nueva).
+
+`pytest`: 280 pasan.
 
 ### Pendiente, con la key
 
-- [ ] `--verificar` con el juez nuevo, que gasta dos llamadas.
+- [x] `--verificar` con el juez nuevo, que gasta dos llamadas.
 - [ ] Ver en AI Studio el límite diario de cada modelo.
 - [ ] `--congelar`, con el código final.
 - [ ] La campaña: `python proyecto_multiagente.py`, las veces que haga falta.

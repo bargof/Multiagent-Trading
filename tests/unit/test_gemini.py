@@ -214,7 +214,9 @@ def test_el_ritmo_se_comparte_por_modelo(monkeypatch):
     juez = crear_modelo(MODELO_JUEZ, CONFIG)
     assert a.rate_limiter is b.rate_limiter
     assert juez.rate_limiter is not a.rate_limiter
-    assert a.rate_limiter.requests_per_second == pytest.approx(8 / 60)
+    assert a.rate_limiter.requests_per_second == pytest.approx(
+        proyecto_multiagente.LLAMADAS_POR_MINUTO / 60
+    )
     # Sin caché: ni la global de LangChain (decisión D51).
     assert a.cache is False and juez.cache is False
 

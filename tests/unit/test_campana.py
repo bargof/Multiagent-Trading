@@ -508,6 +508,20 @@ def test_sin_opciones_y_sin_key_no_se_corre_nada(monkeypatch, capsys):
     assert campanas(proyecto_multiagente.DIR_CAMPANAS) == []
 
 
+def test_congelar_no_borra_la_congelacion_anterior(monkeypatch):
+    """Una campaña ya corrida depende de su congelación: se conserva."""
+    ruta = proyecto_multiagente.RUTA_CONGELACION
+    anterior = {"fecha": "2026-10-27T14:20:31-06:00", "huellas": {"datos": "x"}}
+    ruta.write_text(json.dumps(anterior), encoding="utf-8")
+    monkeypatch.setattr("sys.argv", ["proyecto_multiagente.py", "--congelar"])
+    assert main() == 0
+    guardada = ruta.with_name("congelacion-2026-10-27T142031.json")
+    assert json.loads(guardada.read_text("utf-8")) == anterior
+    assert json.loads(ruta.read_text("utf-8"))["huellas"]["datos"] != "x"
+    assert main() == 0  # una segunda vez no pisa a la primera guardada
+    assert len(list(ruta.parent.glob("congelacion-*.json"))) == 2
+
+
 def test_tabla_lee_la_campana_sin_escribir(monkeypatch, capsys):
     correr(maximo=3)
     campana = unica()
