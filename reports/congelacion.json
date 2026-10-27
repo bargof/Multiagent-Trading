@@ -1,5 +1,5 @@
 {
-  "fecha": "2026-10-27T14:26:30-06:00",
+  "fecha": "2026-10-27T14:57:48-06:00",
   "especificacion": "0.3",
   "huellas": {
     "especificacion": "0.3",
@@ -8,15 +8,15 @@
     "juez": "4593b4da2bf726732355aae5f0365f26df5ab6d7dbadcef5bcd2be59b68c1cf0",
     "agentes": "48d725fdd0a39c8dcccdee72b7b20034932d4762b0e92acfaa1c8f0b3e7c6a44",
     "limites": "8aaf10b249b34d4a6eda1804ff5831e8ba62870e5eb67f382cc0a9b5d101456f",
-    "configuracion": "8117a636ad90b3603516f2a483982113c0f7e17733ae09af5c4c55409b59e535"
+    "configuracion": "c36e23ad40ad74d75ff1795acbfe69d044102007f3818f974b8db4b84a48c4ec"
   },
-  "archivo_sha256": "c9f47f12fc162dfcbda5e5a494a0d232980974ddbbc6ea1da91488ede7485e9e",
+  "archivo_sha256": "df53f086dcb7323db3ded2468605bd09f452113065a505885e1518ef2f7512c4",
   "modelos": {
-    "agentes": "gemini-3.6-flash",
-    "juez": "gemini-3.5-flash-lite",
+    "agentes": "gemini-3.5-flash-lite",
+    "juez": "gemini-3.1-flash-lite",
     "temperatura": null,
     "razonamiento": "medium",
-    "llamadas_por_minuto": 8
+    "llamadas_por_minuto": 12
   },
   "python": "3.12.10",
   "versiones": {

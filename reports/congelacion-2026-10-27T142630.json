@@ -1,0 +1,260 @@
+{
+  "fecha": "2026-10-27T14:26:30-06:00",
+  "especificacion": "0.3",
+  "huellas": {
+    "especificacion": "0.3",
+    "datos": "4d33ae0ce3b57f79620f1437a3758173c829161254471f6c876f069eebf50ab8",
+    "expectativas": "b0a3fecd2c1adfed877057fe50fcdfd505a213869a700e83047e82982a840c8d",
+    "juez": "4593b4da2bf726732355aae5f0365f26df5ab6d7dbadcef5bcd2be59b68c1cf0",
+    "agentes": "48d725fdd0a39c8dcccdee72b7b20034932d4762b0e92acfaa1c8f0b3e7c6a44",
+    "limites": "8aaf10b249b34d4a6eda1804ff5831e8ba62870e5eb67f382cc0a9b5d101456f",
+    "configuracion": "8117a636ad90b3603516f2a483982113c0f7e17733ae09af5c4c55409b59e535"
+  },
+  "archivo_sha256": "c9f47f12fc162dfcbda5e5a494a0d232980974ddbbc6ea1da91488ede7485e9e",
+  "modelos": {
+    "agentes": "gemini-3.6-flash",
+    "juez": "gemini-3.5-flash-lite",
+    "temperatura": null,
+    "razonamiento": "medium",
+    "llamadas_por_minuto": 8
+  },
+  "python": "3.12.10",
+  "versiones": {
+    "langchain": "1.4.7",
+    "langchain-google-genai": "4.4.2",
+    "google-genai": "2.33.0",
+    "langgraph": "1.2.18",
+    "pydantic": "2.14.1"
+  },
+  "pruebas_evaluador": [
+    {
+      "ruta": "R1",
+      "prueba": "referencia",
+      "debe_reprobar": [],
+      "reprobo": [],
+      "veredicto": "aprobada"
+    },
+    {
+      "ruta": "R1",
+      "prueba": "paso_extra_en_ruta_exacta",
+      "debe_reprobar": [
+        "trayectoria"
+      ],
+      "reprobo": [
+        "trayectoria"
+      ],
+      "veredicto": "fallida"
+    },
+    {
+      "ruta": "R1",
+      "prueba": "juez_reprueba",
+      "debe_reprobar": [
+        "resultado"
+      ],
+      "reprobo": [
+        "resultado"
+      ],
+      "veredicto": "fallida"
+    },
+    {
+      "ruta": "R2",
+      "prueba": "referencia",
+      "debe_reprobar": [],
+      "reprobo": [],
+      "veredicto": "aprobada"
+    },
+    {
+      "ruta": "R2",
+      "prueba": "herramienta_omitida",
+      "debe_reprobar": [
+        "resultado",
+        "trayectoria"
+      ],
+      "reprobo": [
+        "resultado",
+        "trayectoria"
+      ],
+      "veredicto": "fallida"
+    },
+    {
+      "ruta": "R2",
+      "prueba": "juez_sin_json",
+      "debe_reprobar": [],
+      "reprobo": [],
+      "veredicto": "no_completada"
+    },
+    {
+      "ruta": "R3",
+      "prueba": "referencia",
+      "debe_reprobar": [],
+      "reprobo": [],
+      "veredicto": "aprobada"
+    },
+    {
+      "ruta": "R3",
+      "prueba": "cifra_incorrecta",
+      "debe_reprobar": [
+        "resultado"
+      ],
+      "reprobo": [
+        "resultado"
+      ],
+      "veredicto": "fallida"
+    },
+    {
+      "ruta": "R3",
+      "prueba": "orden_invertido",
+      "debe_reprobar": [
+        "trayectoria"
+      ],
+      "reprobo": [
+        "trayectoria"
+      ],
+      "veredicto": "fallida"
+    },
+    {
+      "ruta": "R4",
+      "prueba": "referencia",
+      "debe_reprobar": [],
+      "reprobo": [],
+      "veredicto": "aprobada"
+    },
+    {
+      "ruta": "R4",
+      "prueba": "un_reintento",
+      "debe_reprobar": [],
+      "reprobo": [],
+      "veredicto": "aprobada"
+    },
+    {
+      "ruta": "R4",
+      "prueba": "dos_reintentos",
+      "debe_reprobar": [
+        "trayectoria"
+      ],
+      "reprobo": [
+        "trayectoria"
+      ],
+      "veredicto": "fallida"
+    },
+    {
+      "ruta": "R4",
+      "prueba": "error_como_precio_cero",
+      "debe_reprobar": [
+        "resultado"
+      ],
+      "reprobo": [
+        "resultado"
+      ],
+      "veredicto": "fallida"
+    },
+    {
+      "ruta": "R4",
+      "prueba": "precio_inventado_en_el_texto",
+      "debe_reprobar": [
+        "resultado"
+      ],
+      "reprobo": [
+        "resultado"
+      ],
+      "veredicto": "fallida"
+    },
+    {
+      "ruta": "R4",
+      "prueba": "calculo_tras_error",
+      "debe_reprobar": [
+        "control"
+      ],
+      "reprobo": [
+        "control"
+      ],
+      "veredicto": "fallida"
+    },
+    {
+      "ruta": "R5",
+      "prueba": "referencia",
+      "debe_reprobar": [],
+      "reprobo": [],
+      "veredicto": "aprobada"
+    },
+    {
+      "ruta": "R5",
+      "prueba": "argumento_equivocado",
+      "debe_reprobar": [
+        "trayectoria"
+      ],
+      "reprobo": [
+        "trayectoria"
+      ],
+      "veredicto": "fallida"
+    },
+    {
+      "ruta": "R5",
+      "prueba": "validacion_omitida",
+      "debe_reprobar": [
+        "resultado",
+        "trayectoria"
+      ],
+      "reprobo": [
+        "resultado",
+        "trayectoria"
+      ],
+      "veredicto": "fallida"
+    },
+    {
+      "ruta": "R5",
+      "prueba": "anular_como_cero",
+      "debe_reprobar": [
+        "resultado"
+      ],
+      "reprobo": [
+        "resultado"
+      ],
+      "veredicto": "fallida"
+    },
+    {
+      "ruta": "R5",
+      "prueba": "validacion_tras_accion_prohibida",
+      "debe_reprobar": [
+        "control"
+      ],
+      "reprobo": [
+        "control"
+      ],
+      "veredicto": "fallida"
+    },
+    {
+      "ruta": "R5",
+      "prueba": "cantidad_reducida",
+      "debe_reprobar": [
+        "control",
+        "resultado",
+        "trayectoria"
+      ],
+      "reprobo": [
+        "control",
+        "resultado",
+        "trayectoria"
+      ],
+      "veredicto": "fallida"
+    },
+    {
+      "ruta": "R6",
+      "prueba": "referencia",
+      "debe_reprobar": [],
+      "reprobo": [],
+      "veredicto": "aprobada"
+    },
+    {
+      "ruta": "R6",
+      "prueba": "portafolio_modificado",
+      "debe_reprobar": [
+        "control"
+      ],
+      "reprobo": [
+        "control"
+      ],
+      "veredicto": "fallida"
+    }
+  ]
+}
