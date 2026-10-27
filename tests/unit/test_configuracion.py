@@ -18,7 +18,7 @@ def entorno_limpio(monkeypatch):
     # restaura al terminar, aunque cargar_env_local escriba en os.environ por
     # su cuenta. Con delenv solo, una variable que no existía no se registra
     # y la key falsa de la prueba seguiría viva en el resto de la suite.
-    for variable in ("OPENAI_API_KEY", "ANTHROPIC_API_KEY", "MODEL_NAME"):
+    for variable in ("GOOGLE_API_KEY", "GEMINI_API_KEY", "MODEL_NAME"):
         monkeypatch.setenv(variable, "")
         monkeypatch.delenv(variable)
     return monkeypatch
@@ -34,25 +34,25 @@ def test_lee_keys_y_ignora_comentarios(tmp_path, entorno_limpio):
     cargar(
         tmp_path,
         "# comentario\n"
-        "OPENAI_API_KEY=sk-abc   # agentes\n"
-        'ANTHROPIC_API_KEY="sk-ant-x #y"\n'
+        "GOOGLE_API_KEY=AIza-abc   # agentes\n"
+        'GEMINI_API_KEY="AIza-x #y"\n'
         "\n"
         "linea sin igual\n",
     )
-    assert os.environ["OPENAI_API_KEY"] == "sk-abc"
-    assert os.environ["ANTHROPIC_API_KEY"] == "sk-ant-x #y"
+    assert os.environ["GOOGLE_API_KEY"] == "AIza-abc"
+    assert os.environ["GEMINI_API_KEY"] == "AIza-x #y"
 
 
 def test_la_plantilla_vacia_no_define_nada(tmp_path, entorno_limpio):
-    cargar(tmp_path, "OPENAI_API_KEY=\nANTHROPIC_API_KEY=   \n")
-    assert "OPENAI_API_KEY" not in os.environ
-    assert "ANTHROPIC_API_KEY" not in os.environ
+    cargar(tmp_path, "GOOGLE_API_KEY=\nGEMINI_API_KEY=   \n")
+    assert "GOOGLE_API_KEY" not in os.environ
+    assert "GEMINI_API_KEY" not in os.environ
 
 
 def test_no_sobrescribe_variables_del_sistema(tmp_path, entorno_limpio):
-    entorno_limpio.setenv("OPENAI_API_KEY", "sk-del-sistema")
-    cargar(tmp_path, "OPENAI_API_KEY=sk-del-archivo\n")
-    assert os.environ["OPENAI_API_KEY"] == "sk-del-sistema"
+    entorno_limpio.setenv("GOOGLE_API_KEY", "AIza-del-sistema")
+    cargar(tmp_path, "GOOGLE_API_KEY=AIza-del-archivo\n")
+    assert os.environ["GOOGLE_API_KEY"] == "AIza-del-sistema"
 
 
 def test_sin_archivo_no_pasa_nada(tmp_path, entorno_limpio):
@@ -62,5 +62,5 @@ def test_sin_archivo_no_pasa_nada(tmp_path, entorno_limpio):
 def test_la_plantilla_del_repo_no_define_keys(entorno_limpio):
     """Copiar .env.example tal cual no debe dejar una key con basura."""
     cargar_env_local(Path(__file__).resolve().parents[2] / ".env.example")
-    assert "OPENAI_API_KEY" not in os.environ
-    assert "ANTHROPIC_API_KEY" not in os.environ
+    assert "GOOGLE_API_KEY" not in os.environ
+    assert "GEMINI_API_KEY" not in os.environ

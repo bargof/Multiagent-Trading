@@ -1,4 +1,4 @@
-# pip install langchain==1.4.7 langchain-openai==1.7.3 langchain-anthropic==1.7.6 langgraph==1.2.18 openai==3.39.0 anthropic==1.17.0 pydantic==2.14.1  # noqa: E501
+# pip install langchain==1.4.7 langchain-google-genai==4.4.2 google-genai==2.33.0 langgraph==1.2.18 pydantic==2.14.1  # noqa: E501
 """Comité de inversión multiagente: sistema y evaluación en un solo archivo.
 
 Proyecto final del Módulo 4 · Diplomado en AI & LLMs para Mercados Financieros
@@ -13,11 +13,11 @@ Uso:
     python proyecto_multiagente.py --probar-evaluador   # trazas con defectos
     python proyecto_multiagente.py --congelar           # registra las huellas
 
-Configuración obligatoria: dos variables de entorno, una por proveedor.
-OPENAI_API_KEY para los agentes y ANTHROPIC_API_KEY para el juez, o un archivo
-.env junto a este script (ver .env.example). Juez y agentes son de proveedores
-distintos para que el juez no comparta los sesgos del modelo que evalúa. No
-existe herramienta de ejecución: nada sale hacia un intermediario.
+Configuración obligatoria: una variable de entorno, GOOGLE_API_KEY, con una
+key de Google AI Studio, o un archivo .env junto a este script (ver
+.env.example). Agentes y juez usan Gemini con modelos distintos, para que el
+juez no califique salidas de su mismo modelo. No existe herramienta de
+ejecución: nada sale hacia un intermediario.
 
 Secciones, en el orden del plan de implementación:
 
@@ -35,6 +35,7 @@ import argparse
 import hashlib
 import importlib.metadata
 import json
+import logging
 import os
 import platform
 import re
@@ -52,17 +53,25 @@ from enum import StrEnum
 from pathlib import Path
 from typing import Annotated, Any, Literal, TypedDict
 
-import anthropic
-import openai
+import httpx
+from google.genai import errors as genai_errors
 from langchain.agents import create_agent
 from langchain.agents.middleware import AgentMiddleware
 from langchain.agents.structured_output import ToolStrategy
-from langchain_anthropic import ChatAnthropic
+from langchain_core.exceptions import (
+    ModelAPIError,
+    ModelConnectionError,
+    ModelError,
+    ModelRateLimitError,
+    ModelTimeoutError,
+)
 from langchain_core.language_models import BaseChatModel
 from langchain_core.messages import AIMessage, HumanMessage, SystemMessage, ToolMessage
 from langchain_core.outputs import ChatGeneration, ChatResult
+from langchain_core.rate_limiters import InMemoryRateLimiter
 from langchain_core.tools import StructuredTool, tool
-from langchain_openai import ChatOpenAI
+from langchain_google_genai import ChatGoogleGenerativeAI
+from langchain_google_genai.chat_models import ChatGoogleGenerativeAIError
 from langgraph.errors import GraphRecursionError
 from langgraph.graph import END, START, StateGraph
 from pydantic import (
@@ -84,30 +93,37 @@ from pydantic import (
 
 VERSION_ESPECIFICACION = "0.3"
 
-# Versiones instaladas y comprobadas juntas el 26 de octubre de 2026 (ver
-# docs/pruebas.md). Deben coincidir con el comentario pip de la primera línea.
+# Versiones instaladas y comprobadas juntas; las de Gemini, el 27 de octubre
+# de 2026 (ver docs/pruebas.md). Deben coincidir con el comentario pip de la
+# primera línea.
 VERSIONES_FIJADAS = {
     "langchain": "1.4.7",
-    "langchain-openai": "1.7.3",
-    "langchain-anthropic": "1.7.6",
+    "langchain-google-genai": "4.4.2",
+    "google-genai": "2.33.0",
     "langgraph": "1.2.18",
-    "openai": "3.39.0",
-    "anthropic": "1.17.0",
     "pydantic": "2.14.1",
 }
 
-# Agentes con OpenAI, como fija la sección 3.1. El juez con Anthropic
-# (decisión D22): son pocas llamadas por campaña, así que se usa un modelo
-# capaz y no el más barato.
-MODELO_AGENTES = "gpt-4.1-mini"
-MODELO_JUEZ = "claude-sonnet-5-5"
+# Un solo proveedor, Gemini, por su capa gratuita (decisión D47, que
+# reemplaza a D22). Los agentes usan 3.6 Flash, que langchain-google-genai
+# 4.4.2 trata de forma explícita. El juez usa 3.8 Flash: comparte proveedor
+# con los agentes, pero no califica salidas de su mismo modelo.
+MODELO_AGENTES = "gemini-3.6-flash"
+MODELO_JUEZ = "gemini-3.8-flash"
+# Gemini 3.6 en adelante ya no admite temperature, y la sección 3.1 pide 0
+# «cuando el modelo la admita»: no se envía (decisión D48).
+TEMPERATURA = None
+# Fijado en vez de heredar el predeterminado del proveedor, que podría
+# cambiar entre campañas. Google recomienda "medium" para agentes.
+RAZONAMIENTO = "medium"
+# Por modelo, debajo del límite por minuto de la capa gratuita (decisión
+# D50). El límite real del proyecto se ve en AI Studio; GEMINI_RPM lo ajusta.
+LLAMADAS_POR_MINUTO = 8
 REPETICIONES_POR_RUTA = 3
 
-VARIABLE_DE_KEY = {"openai": "OPENAI_API_KEY", "anthropic": "ANTHROPIC_API_KEY"}
-
-
-def proveedor_de(modelo: str) -> str:
-    return "anthropic" if modelo.startswith("claude") else "openai"
+# La key es de Google AI Studio. langchain-google-genai lee GOOGLE_API_KEY y,
+# si falta, GEMINI_API_KEY.
+VARIABLES_DE_KEY = ("GOOGLE_API_KEY", "GEMINI_API_KEY")
 
 
 @dataclass(frozen=True)
@@ -127,6 +143,7 @@ class Limites:
     timeout_llamada_s: int = 60
     timeout_caso_s: int = 300
     reintentos_transporte: int = 1
+    pausa_reintento_s: int = 10
 
 
 LIMITES = Limites()
@@ -143,28 +160,31 @@ class Configuracion:
 
     modelo: str
     modelo_juez: str
-    temperatura: float
+    temperatura: float | None = TEMPERATURA
+    razonamiento: str = RAZONAMIENTO
+    # Solo marca el ritmo: no cambia lo que ven los modelos, así que no entra
+    # en las huellas.
+    llamadas_por_minuto: int = LLAMADAS_POR_MINUTO
 
     @classmethod
     def desde_entorno(cls) -> "Configuracion":
         return cls(
             modelo=os.environ.get("MODEL_NAME", MODELO_AGENTES),
             modelo_juez=os.environ.get("JUDGE_MODEL", MODELO_JUEZ),
-            temperatura=0.0,
+            llamadas_por_minuto=int(os.environ.get("GEMINI_RPM", LLAMADAS_POR_MINUTO)),
         )
 
     def keys_faltantes(self) -> list[str]:
-        necesarias = {
-            VARIABLE_DE_KEY[proveedor_de(m)] for m in (self.modelo, self.modelo_juez)
-        }
-        return sorted(v for v in necesarias if not os.environ.get(v))
+        if any(os.environ.get(v) for v in VARIABLES_DE_KEY):
+            return []
+        return [VARIABLES_DE_KEY[0]]
 
 
 def cargar_env_local(ruta: Path) -> None:
     """Carga un .env sencillo sin sobrescribir variables ya definidas.
 
     Evita añadir python-dotenv como dependencia solo para esto. Los valores
-    vacíos se ignoran para que la plantilla `OPENAI_API_KEY=` de .env.example
+    vacíos se ignoran para que la plantilla `GOOGLE_API_KEY=` de .env.example
     no oculte una variable definida en el sistema.
     """
     if not ruta.is_file():
@@ -1291,6 +1311,7 @@ def huellas_campana(config: Configuracion) -> dict[str, str]:
                 "modelo": config.modelo,
                 "modelo_juez": config.modelo_juez,
                 "temperatura": config.temperatura,
+                "razonamiento": config.razonamiento,
                 "versiones": VERSIONES_FIJADAS,
             }
         ),
@@ -2112,9 +2133,9 @@ class Traza:
         self.run_id = run_id
         self.eventos: list[EventoTraza] = []
         self._reloj = reloj
-        # LangChain ejecuta en hilos las llamadas que un modelo pide en un
-        # mismo turno. Se piden de una en una (parallel_tool_calls=False),
-        # pero si un modelo no lo respeta, la numeración no debe corromperse.
+        # Las llamadas que un modelo pide en un mismo turno se ejecutan de una
+        # en una (decisión D49), pero LangChain las lanza desde hilos: la
+        # numeración no debe depender de eso.
         self._candado = threading.Lock()
 
     def abrir(
@@ -2347,28 +2368,63 @@ class Mesa:
 # (ver docs/pruebas.md). Este solo evita un bucle si todo lo demás fallara.
 PASOS_POR_AGENTE = 2 * LIMITES.llamadas_modelo + 10
 
+# Los errores de modelo de langchain-core son comunes a los proveedores:
+# langchain-google-genai entrega un 429 como ModelRateLimitError y un 5xx,
+# incluido el 503 de modelo saturado, como ModelAPIError. Un corte de red o un
+# timeout llega sin envolver, como error de httpx.
 _TRANSITORIOS = (
-    openai.APIConnectionError,  # incluye APITimeoutError
-    openai.RateLimitError,
-    openai.InternalServerError,
-    anthropic.APIConnectionError,
-    anthropic.RateLimitError,
-    anthropic.InternalServerError,
+    ModelRateLimitError,
+    ModelAPIError,
+    ModelConnectionError,
+    ModelTimeoutError,
+    httpx.TransportError,
 )
 
+# Al convertir los esquemas, langchain-google-genai descarta
+# additionalProperties y lo avisa por cada campo en cada llamada. No se pierde
+# ningún control: la Mesa valida los argumentos con el esquema completo.
+logging.getLogger("langchain_google_genai._function_utils").setLevel(logging.ERROR)
 
-def crear_modelo(nombre: str, temperatura: float = 0.0) -> BaseChatModel:
+# La cuota gratuita es por modelo y proyecto, no por agente: todas las
+# instancias de un modelo comparten su ritmo.
+_RITMOS: dict[tuple[str, int], InMemoryRateLimiter] = {}
+
+
+def crear_modelo(nombre: str, config: Configuracion) -> BaseChatModel:
     """Sin reintentos internos: el único reintento lo hace el middleware y
     queda en la traza (sección 3.2)."""
-    comun = {
+    ritmo = _RITMOS.setdefault(
+        (nombre, config.llamadas_por_minuto),
+        InMemoryRateLimiter(
+            requests_per_second=config.llamadas_por_minuto / 60,
+            check_every_n_seconds=0.1,
+        ),
+    )
+    opciones: dict[str, Any] = {
         "model": nombre,
-        "temperature": temperatura,
+        "thinking_level": config.razonamiento,
         "timeout": LIMITES.timeout_llamada_s,
         "max_retries": 0,
+        "rate_limiter": ritmo,
     }
-    if proveedor_de(nombre) == "anthropic":
-        return ChatAnthropic(**comun)
-    return ChatOpenAI(**comun)
+    if config.temperatura is not None:
+        opciones["temperature"] = config.temperatura
+    return ChatGoogleGenerativeAI(**opciones)
+
+
+def nombre_modelo(modelo: BaseChatModel) -> str:
+    """Gemini lo guarda en `model`; el modelo de guion, en `model_name`."""
+    return str(
+        getattr(modelo, "model_name", None)
+        or getattr(modelo, "model", None)
+        or type(modelo).__name__
+    )
+
+
+def pausar_antes_de_reintentar() -> None:
+    """Un 503 o un 429 de la capa gratuita suele pasar en segundos; reintentar
+    al instante casi siempre vuelve a fallar. Las pruebas la sustituyen."""
+    time.sleep(LIMITES.pausa_reintento_s)
 
 
 class CasoCerrado(Exception):  # noqa: N818 — no es un error del programa
@@ -2833,16 +2889,36 @@ def _solo_por_la_mesa(**_: Any) -> str:
     raise RuntimeError("Toda llamada pasa por la Mesa; esta función no se ejecuta.")
 
 
+def herramientas_para(agente: str) -> list[StructuredTool]:
+    """Solo dan al modelo el nombre, la descripción y el esquema."""
+    if agente == "A0":
+        especificaciones = [
+            (d.nombre, d.descripcion, d.esquema) for d in DELEGACIONES.values()
+        ]
+    else:
+        especificaciones = [
+            (h.nombre, h.descripcion, h.esquema)
+            for h in HERRAMIENTAS.values()
+            if h.agente == agente
+        ]
+    return [
+        StructuredTool.from_function(
+            func=_solo_por_la_mesa, name=n, description=d, args_schema=e
+        )
+        for n, d, e in especificaciones
+    ]
+
+
 # --- Middleware: presupuesto, reintento y captura ---
 
 
 class _Supervision(AgentMiddleware):
     """Se instala en cada agente de cada invocación.
 
-    En cada llamada al modelo consume presupuesto, pide una herramienta por
-    turno, aplica el único reintento por fallo de transporte y registra lo
-    que el modelo pidió. En cada llamada a herramienta desvía la ejecución a
-    la Mesa (especialistas) o a la delegación (supervisor).
+    En cada llamada al modelo consume presupuesto, aplica el único reintento
+    por fallo de transporte y registra lo que el modelo pidió. En cada llamada
+    a herramienta desvía la ejecución a la Mesa (especialistas) o a la
+    delegación (supervisor).
     """
 
     def __init__(self, caso: "Caso", agente: str, invocacion: str):
@@ -2853,9 +2929,6 @@ class _Supervision(AgentMiddleware):
 
     def wrap_model_call(self, request, handler):
         traza = self.caso.traza
-        request = request.override(
-            model_settings={**request.model_settings, "parallel_tool_calls": False}
-        )
         for intento in range(LIMITES.reintentos_transporte + 1):
             try:
                 self.caso.presupuesto.consumir_llamada_modelo()
@@ -2877,6 +2950,7 @@ class _Supervision(AgentMiddleware):
                         CodigoError.MODEL_UNAVAILABLE,
                         f"El modelo no respondió: {type(error).__name__}.",
                     ) from error
+                pausar_antes_de_reintentar()
         self.caso.registrar_llamada_modelo(
             self.agente, self.invocacion, request, respuesta
         )
@@ -2943,25 +3017,6 @@ class Caso:
         self._invocaciones[agente] += 1
         return f"{agente}-{self._invocaciones[agente]}"
 
-    def _herramientas_para(self, agente: str) -> list[StructuredTool]:
-        """Solo dan al modelo el nombre, la descripción y el esquema."""
-        if agente == "A0":
-            especificaciones = [
-                (d.nombre, d.descripcion, d.esquema) for d in DELEGACIONES.values()
-            ]
-        else:
-            especificaciones = [
-                (h.nombre, h.descripcion, h.esquema)
-                for h in HERRAMIENTAS.values()
-                if h.agente == agente
-            ]
-        return [
-            StructuredTool.from_function(
-                func=_solo_por_la_mesa, name=n, description=d, args_schema=e
-            )
-            for n, d, e in especificaciones
-        ]
-
     def _reparador(self, agente: str, invocacion: str) -> Callable[[Exception], str]:
         """Una salida fuera de esquema admite una sola reparación (sección 5.2).
 
@@ -2993,7 +3048,7 @@ class Caso:
     def invocar(self, agente: str, invocacion: str, mensaje: str) -> BaseModel:
         modelo = create_agent(
             self._modelo_para(agente),
-            tools=self._herramientas_para(agente),
+            tools=herramientas_para(agente),
             system_prompt=PROMPTS[agente],
             middleware=[_Supervision(self, agente, invocacion)],
             response_format=ToolStrategy(
@@ -3003,9 +3058,11 @@ class Caso:
         )
         contexto = f"\n\nFecha de corte del caso (T0): {self.entorno.t0.isoformat()}."
         try:
+            # Si el modelo pide varias herramientas en un turno, se ejecutan de
+            # una en una y en el orden pedido (decisión D49).
             estado = modelo.invoke(
                 {"messages": [HumanMessage(mensaje + contexto)]},
-                config={"recursion_limit": PASOS_POR_AGENTE},
+                config={"recursion_limit": PASOS_POR_AGENTE, "max_concurrency": 1},
             )
         except GraphRecursionError as error:
             raise self.cerrar(
@@ -3027,18 +3084,17 @@ class Caso:
         for clave in ("input_tokens", "output_tokens"):
             self.tokens[clave] += uso.get(clave, 0)
         pedidas = [{"name": c["name"], "args": c["args"]} for c in mensaje.tool_calls]
-        modelo = (
-            getattr(request.model, "model_name", None) or type(request.model).__name__
-        )
         self.traza.registrar(
             ClaseEvento.MODELO,
             agente,
-            str(modelo),
+            nombre_modelo(request.model),
             {
                 "status": "ok",
                 "llamadas_pedidas": pedidas,
                 "llamadas_invalidas": [dict(c) for c in mensaje.invalid_tool_calls],
-                "texto": str(mensaje.content)[:500],
+                # Gemini devuelve bloques con firmas en base64; solo cuenta el
+                # texto.
+                "texto": mensaje.text[:500],
                 "uso": dict(uso),
             },
             invocacion=invocacion,
@@ -4327,11 +4383,7 @@ def juzgar(juez_id: str, resultado: ResultadoCaso, modelo: BaseChatModel) -> Jui
     mensaje = mensaje_juez(juez_id, resultado)
     juicio = Juicio(
         juez=juez_id,
-        modelo=str(
-            getattr(modelo, "model_name", None)
-            or getattr(modelo, "model", None)
-            or type(modelo).__name__
-        ),
+        modelo=nombre_modelo(modelo),
         huella_prompt=huella(
             {"prompt": PROMPT_JUEZ, "criterios": CRITERIOS_JUEZ[juez_id]}
         ),
@@ -4347,7 +4399,8 @@ def juzgar(juez_id: str, resultado: ResultadoCaso, modelo: BaseChatModel) -> Jui
                 juicio.error = f"El juez no respondió: {type(error).__name__}."
                 return juicio
             juicio.reintentos += 1
-        except (openai.APIError, anthropic.APIError) as error:
+            pausar_antes_de_reintentar()
+        except (ModelError, ChatGoogleGenerativeAIError) as error:
             juicio.error = f"Error del proveedor del juez: {error}"
             return juicio
 
@@ -5214,6 +5267,8 @@ def congelacion(
             "agentes": config.modelo,
             "juez": config.modelo_juez,
             "temperatura": config.temperatura,
+            "razonamiento": config.razonamiento,
+            "llamadas_por_minuto": config.llamadas_por_minuto,
         },
         "python": platform.python_version(),
         "versiones": versiones,
@@ -5235,78 +5290,104 @@ def congelacion(
 # ═══════════════════════════════════════════
 
 
-class _Eco(BaseModel):
-    palabra: str
-
-
-def _disponible(nombre: str) -> bool:
-    sdk = anthropic if proveedor_de(nombre) == "anthropic" else openai
-    cliente = anthropic.Anthropic() if sdk is anthropic else openai.OpenAI()
+def _disponible(llm: ChatGoogleGenerativeAI) -> bool:
+    """Consulta los metadatos del modelo, que no gastan cuota de generación."""
     try:
-        cliente.models.retrieve(nombre)
-    except sdk.AuthenticationError:
-        variable = VARIABLE_DE_KEY[proveedor_de(nombre)]
-        print(f"  [X] La key de {variable} no es válida para el proveedor.")
+        llm.client.models.get(model=llm.model)
+    except genai_errors.ClientError as error:
+        if error.code == 404:
+            print(f"  [X] {llm.model} no está disponible para esta key.")
+        else:
+            print(f"  [X] Google rechazó la consulta ({error.code}): {error.message}")
+            if error.code in (400, 401, 403):
+                print("      Revisa que GOOGLE_API_KEY sea una key de AI Studio.")
         return False
-    except sdk.NotFoundError:
-        print(f"  [X] {nombre} no está disponible para esta cuenta.")
+    except httpx.TransportError:
+        print("  [X] Sin conexión con Google (red, proxy o firewall).")
         return False
-    except sdk.APIConnectionError:
-        print("  [X] Sin conexión con el proveedor (red, proxy o firewall).")
-        return False
-    print("  [ok] disponible en la cuenta")
+    print("  [ok] disponible para esta key")
     return True
 
 
-def _probar_modelo(nombre: str, temperatura: float) -> bool:
-    """Tres llamadas mínimas: texto, herramienta y salida estructurada.
+def esquemas_del_sistema() -> list[Any]:
+    """Todo lo que verán los agentes: herramientas, delegaciones y salidas.
 
-    Son las tres capacidades de las que depende el sistema. Comprobarlas por
-    separado dice cuál falla si algo falla, en vez de descubrirlo a mitad de
-    la campaña.
+    La delegación de A0 y la herramienta de A3 se llaman las dos
+    consultar_portafolio, y una petición no admite dos funciones con el mismo
+    nombre. Solo para esta comprobación, la segunda lleva el agente al final.
     """
-    if not _disponible(nombre):
-        return False
-    llm = crear_modelo(nombre, temperatura)
-    try:
-        texto = llm.invoke("Responde únicamente con la palabra: ok")
-    except (openai.BadRequestError, anthropic.BadRequestError) as error:
-        print(f"  [X] rechazó la llamada básica: {error}")
-        if "temperature" in str(error).lower():
-            print("      El modelo no admite temperature=0; elige otro modelo.")
-        return False
-    uso = texto.usage_metadata or {}
-    print(
-        f"  [ok] texto: {str(texto.content).strip()!r} "
-        f"({uso.get('input_tokens', '?')}+{uso.get('output_tokens', '?')} tokens)"
-    )
+    vistos: set[str] = set()
+    esquemas: list[Any] = []
+    for agente, salida in SALIDAS.items():
+        for h in herramientas_para(agente):
+            if h.name in vistos:
+                h = StructuredTool.from_function(
+                    func=_solo_por_la_mesa,
+                    name=f"{h.name}_{agente}",
+                    description=h.description,
+                    args_schema=h.args_schema,
+                )
+            vistos.add(h.name)
+            esquemas.append(h)
+        esquemas.append(salida)
+    return esquemas
+
+
+def _uso(mensaje: AIMessage) -> str:
+    uso = mensaje.usage_metadata or {}
+    return f"{uso.get('input_tokens', '?')}+{uso.get('output_tokens', '?')} tokens"
+
+
+def _probar_agentes(llm: BaseChatModel) -> bool:
+    """Una sola llamada con todos los esquemas del sistema y la herramienta eco.
+
+    La API valida cada declaración aunque el modelo use solo una. Con una
+    llamada se sabe si acepta todos los esquemas y si el modelo llama
+    herramientas, que es también como entrega su salida estructurada.
+    """
 
     @tool
     def eco(texto: str) -> str:
         """Devuelve el texto recibido."""
         return texto
 
-    llamada = llm.bind_tools([eco]).invoke("Usa la herramienta eco con texto='hola'.")
-    usa_herramienta = any(
+    esquemas = esquemas_del_sistema()
+    try:
+        llamada = llm.bind_tools([*esquemas, eco]).invoke(
+            "Usa la herramienta eco con texto='hola'."
+        )
+    except (ModelError, ChatGoogleGenerativeAIError, httpx.TransportError) as error:
+        print(f"  [X] rechazó la petición con los esquemas del sistema: {error}")
+        return False
+    usa_eco = any(
         c["name"] == "eco" and c["args"].get("texto") == "hola"
         for c in llamada.tool_calls
     )
-    print(f"  [{'ok' if usa_herramienta else 'X'}] llamada a herramienta")
+    print(
+        f"  [{'ok' if usa_eco else 'X'}] acepta los {len(esquemas)} esquemas y "
+        f"llama herramientas ({_uso(llamada)})"
+    )
+    return usa_eco
 
+
+def _probar_juez(llm: BaseChatModel) -> bool:
+    """Una llamada de texto sin herramientas, como las del juez."""
     try:
-        salida = llm.with_structured_output(_Eco).invoke(
-            "Devuelve la palabra 'listo' en el campo palabra."
-        )
-        estructurada = isinstance(salida, _Eco) and salida.palabra == "listo"
-    except (ValidationError, openai.BadRequestError, anthropic.BadRequestError):
-        estructurada = False
-    print(f"  [{'ok' if estructurada else 'X'}] salida estructurada")
-
-    return usa_herramienta and estructurada
+        respuesta = llm.invoke("Responde únicamente con la palabra: ok")
+    except (ModelError, ChatGoogleGenerativeAIError, httpx.TransportError) as error:
+        print(f"  [X] rechazó la llamada de texto: {error}")
+        return False
+    texto = respuesta.text.strip()
+    responde = "ok" in texto.lower()
+    print(f"  [{'ok' if responde else 'X'}] texto: {texto!r} ({_uso(respuesta)})")
+    return responde
 
 
 def verificar_entorno(config: Configuracion) -> bool:
-    """Bloque 1: Python, versiones fijadas, huellas y acceso al modelo."""
+    """Bloque 1: Python, versiones fijadas, huellas y acceso a los modelos.
+
+    Gasta dos llamadas de la cuota diaria, una por modelo (decisión D50).
+    """
     ok = sys.version_info >= (3, 11)
     print(f"\n  [{'ok' if ok else 'X'}] Python {platform.python_version()}")
 
@@ -5324,22 +5405,23 @@ def verificar_entorno(config: Configuracion) -> bool:
     for componente, valor in huellas_campana(config).items():
         print(f"    {componente:<14} {valor[:16]}")
 
-    faltan = config.keys_faltantes()
-    if faltan:
+    if config.keys_faltantes():
         print(
-            f"\n  [X] Falta {', '.join(faltan)}. Configúrala en tu equipo, nunca "
-            "en el código:\n"
+            "\n  [X] Falta GOOGLE_API_KEY. Configúrala en tu equipo, nunca en el "
+            "código:\n"
             "      - copia .env.example a .env y escríbela ahí, o\n"
-            '      - PowerShell, solo esta sesión:  $env:NOMBRE = "..."'
+            '      - PowerShell, solo esta sesión:  $env:GOOGLE_API_KEY = "..."'
         )
-        ok = False
+        return False
 
-    for papel, nombre in (("agentes", config.modelo), ("juez", config.modelo_juez)):
-        print(f"\n  Modelo de {papel}: {nombre} ({proveedor_de(nombre)})")
-        if VARIABLE_DE_KEY[proveedor_de(nombre)] in faltan:
-            print("  [..] sin key, no se prueba")
-            continue
-        ok &= _probar_modelo(nombre, config.temperatura)
+    print(f"\n  Ritmo: {config.llamadas_por_minuto} llamadas por minuto por modelo")
+    for papel, nombre, probar in (
+        ("agentes", config.modelo, _probar_agentes),
+        ("juez", config.modelo_juez, _probar_juez),
+    ):
+        print(f"\n  Modelo de {papel}: {nombre}")
+        llm = crear_modelo(nombre, config)
+        ok &= _disponible(llm) and probar(llm)
     return ok
 
 
@@ -5432,11 +5514,10 @@ def main() -> int:
         return 0
 
     if args.consulta:
-        variable = VARIABLE_DE_KEY[proveedor_de(config.modelo)]
-        if not os.environ.get(variable):
-            print(f"Falta {variable}. Corre --verificar para ver cómo configurarla.")
+        if config.keys_faltantes():
+            print("Falta GOOGLE_API_KEY. Corre --verificar para ver cómo configurarla.")
             return 1
-        modelo = crear_modelo(config.modelo, config.temperatura)
+        modelo = crear_modelo(config.modelo, config)
         resultado = ejecutar_caso(
             args.consulta, modelo_para=lambda _: modelo, fallas=args.falla
         )

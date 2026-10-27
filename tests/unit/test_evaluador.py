@@ -10,8 +10,7 @@ from dataclasses import replace
 from decimal import Decimal
 from functools import cache
 
-import httpx2
-import openai
+import httpx
 import pytest
 from langchain_core.messages import AIMessage
 
@@ -412,8 +411,8 @@ def test_validacion_del_veredicto(caso_r1, salida, aprobado):
     assert (j.error is None) == (aprobado is not None)
 
 
-def _corte() -> openai.APITimeoutError:
-    return openai.APITimeoutError(request=httpx2.Request("POST", "https://x"))
+def _corte() -> httpx.ReadTimeout:
+    return httpx.ReadTimeout("sin respuesta")
 
 
 def test_el_juez_tiene_un_reintento_de_transporte(caso_r1):
@@ -427,7 +426,7 @@ def test_el_juez_tiene_un_reintento_de_transporte(caso_r1):
 def test_un_juez_que_no_responde_deja_la_evaluacion_sin_completar(caso_r1):
     juez = ModeloGuion(respuestas=[_corte(), _corte()])
     j = juzgar("J1", caso_r1, juez)
-    assert j.aprobado is None and "APITimeoutError" in j.error
+    assert j.aprobado is None and "ReadTimeout" in j.error
 
 
 def test_sin_juez_la_ruta_no_se_aprueba_ni_se_reprueba(caso_r1):
@@ -446,19 +445,18 @@ def test_la_evaluacion_se_puede_guardar_en_json():
 
 
 def test_la_congelacion_registra_huellas_y_no_las_keys(monkeypatch):
-    monkeypatch.setenv("OPENAI_API_KEY", "sk-prueba")
-    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-prueba")
-    config = Configuracion(modelo="m", modelo_juez="claude-j", temperatura=0.0)
+    monkeypatch.setenv("GOOGLE_API_KEY", "AIza-prueba")
+    config = Configuracion(modelo="m", modelo_juez="j")
     pruebas = [corrida(*c) for c in POR_NOMBRE]
     registro = congelacion(config, pruebas)
     assert registro["huellas"] == huellas_campana(config)
     assert len(registro["archivo_sha256"]) == 64
     assert len(registro["pruebas_evaluador"]) == len(PRUEBAS_EVALUADOR)
-    assert "sk-" not in json.dumps(registro)
+    assert "AIza" not in json.dumps(registro)
 
 
 def test_no_se_congela_si_el_evaluador_falla_una_prueba():
-    config = Configuracion(modelo="m", modelo_juez="claude-j", temperatura=0.0)
+    config = Configuracion(modelo="m", modelo_juez="j")
     buena = corrida("R1", "referencia")
     mala = replace(buena, fallaron=frozenset({"resultado"}))
     with pytest.raises(ValueError):

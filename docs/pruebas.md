@@ -48,6 +48,7 @@ lo cubre.
 ### Pendiente para cerrar el bloque
 
 - [ ] Configurar `OPENAI_API_KEY` y correr `--verificar` con el modelo.
+      *Sustituido: ver «Cambio a Gemini».*
 - [ ] Registrar aquí disponibilidad, tokens de la llamada mínima, llamada a
       herramienta y salida estructurada.
 
@@ -206,6 +207,7 @@ pasaron a líneas propias, el cargador ignora los de final de línea y
 - [ ] `--verificar` con las dos keys.
 - [ ] Un caso de desarrollo y un bloqueo con gpt-4.1-mini, con entradas
       distintas de R1–R6 para no ajustar los prompts a la clave.
+      *Sustituido: ver «Cambio a Gemini».*
 
 ---
 
@@ -297,3 +299,102 @@ corre antes de congelar. Solo la atrapaba una prueba unitaria. Se agregó la
 prueba sintética `anular_como_cero`, y con ella la mutación da 22/23. Es la
 misma falla que apareció en el Bloque 1 con la serialización de
 `aprobacion_puede_anular`.
+
+---
+
+## Cambio a Gemini · 27 de octubre de 2026
+
+Solo hay una key de Gemini, y su capa gratuita tiene cuota. Agentes y juez
+pasan a Gemini (decisiones D47 a D50), y todo lo de esta sección se comprobó
+sin llamar a la API: ninguna prueba gastó cuota.
+
+**Lo que se consultó antes de elegir.** Al 27 de octubre:
+- La lista de modelos de Google da como estables gemini-3.8-flash,
+  3.6-flash, 3.5-flash-lite y 3.1-flash-lite.
+- La página de precios marca 3.6 y 3.8 Flash como gratuitos, y avisa que en
+  la capa gratuita el contenido se usa para mejorar los productos de Google.
+- La página de límites ya no publica cifras por modelo: remite a AI Studio.
+  Las estimaciones de terceros rondan 10 llamadas por minuto para Flash, y
+  no coinciden en el límite diario.
+- La guía de 3.8 Flash da `temperature` por obsoleto y pide que cada
+  respuesta de función lleve el identificador de su llamada.
+
+**Versiones.** `pip install langchain-google-genai==4.4.2` instaló
+google-genai 2.33.0, bajó tenacity de 9.2.1 a 9.1.4 y no cambió
+langchain-core 1.7.0. `pip check` no encontró conflictos. Después se
+desinstalaron langchain-openai, langchain-anthropic, openai y anthropic, y la
+suite siguió pasando: nada depende ya de ellos.
+
+**Lo que dice el código de la librería.**
+- 4.4.2 trata gemini-3.6-flash y 3.5-flash-lite como modelos de muestreo
+  fijo: si recibe `temperature`, la quita y avisa. A 3.8 no lo trata así.
+- En cualquier Gemini 3, si no se le pasa `temperature`, no la envía.
+- Las respuestas de función salen con nombre, pero sin el identificador de la
+  llamada. Por eso los agentes van en 3.6 y no en 3.8 (D47).
+- `max_retries=0` llega al SDK como un solo intento.
+
+**Sonda sin red.** Se construyó el modelo con una key falsa y se armaron las
+peticiones sin enviarlas:
+- `parallel_tool_calls=False`, que el middleware mandaba desde el Bloque 3,
+  hace fallar la petición (`extra_forbidden`) antes de salir. Con Gemini
+  habría tumbado la primera llamada de la campaña.
+- Los 19 esquemas del sistema se convierten. El conversor descarta
+  `additionalProperties`, que la Mesa sigue validando.
+- El cliente del SDK se puede sustituir, y en eso se basan las pruebas.
+
+**Experimento de concurrencia.** A3 pidió dos herramientas en un turno, y la
+primera tardaba 0.4 s. Sin límite, las dos empezaron a la vez y la segunda
+terminó primero. Con `max_concurrency=1`, la segunda empezó cuando terminó
+la primera (D49).
+
+**Cliente falso** (`tests/unit/test_gemini.py`, 27 pruebas). Ocupa el lugar
+del cliente de Google: guarda cada petición y contesta con el guion,
+convertido al formato de la API. Responde con argumentos que pasaron por
+JSON y con la firma de pensamiento en la primera llamada de cada turno.
+- Las seis rutas de referencia aprueban pasando por la conversión real.
+- Ninguna petición lleva `temperature`. Todas llevan el razonamiento `medium`,
+  el timeout de 60 s, un solo intento, el prompt del agente y exactamente
+  sus herramientas más su salida.
+- Las firmas vuelven al modelo en cada turno y no entran en la traza. Cada
+  llamada recibe su respuesta con nombre.
+- El juez recibe el prompt exacto, sin herramientas, y registra modelo y
+  tokens.
+- Un 503, un 429, un timeout y un corte de red se reintentan una vez,
+  después de la pausa. Dos 429 seguidos cierran el caso con
+  `MODEL_UNAVAILABLE`. Un 400 no se reintenta.
+- `--verificar` hace una llamada por modelo: la de los agentes declara los
+  19 esquemas más el eco, sin nombres repetidos. Sin key, no construye
+  ningún modelo.
+- `tests/conftest.py` corta httpx: un modelo con el cliente real falla en la
+  prueba en vez de llegar a Google.
+
+**Prueba de mutaciones.** Se rompió cada pieza nueva en una copia del repo y
+se corrió la suite desde la copia:
+
+| Mutación | Pruebas que fallan |
+|---|---|
+| vuelve `parallel_tool_calls=False` | 22 |
+| herramientas de un turno en paralelo | 1 |
+| `temperature=0` siempre | 1 |
+| un corte de red no es transitorio | 5 |
+| reintento sin pausa | 4 |
+| un ritmo por instancia, no por modelo | 1 |
+| copia sin mutar | 0 |
+
+`temperature=0` solo lo atrapa la prueba del juez: en 3.6, la librería lo
+quita con un aviso, y solo 3.8 lo enviaría.
+
+**Resultado.**
+- `pytest`: 251 pasan.
+- `ruff check` y `ruff format --check`: limpios.
+- `--probar-evaluador`: 23/23.
+- Sin key, `verificar_entorno` revisa versiones y huellas, avisa que falta
+  `GOOGLE_API_KEY` y termina sin llamadas.
+- Con los guiones de referencia, una campaña completa son al menos 129
+  llamadas.
+
+### Pendiente, con la key
+
+- [ ] `--verificar`, que gasta dos llamadas.
+- [ ] Una consulta de desarrollo con entradas distintas de R1–R6.
+- [ ] Ver en AI Studio el límite diario de cada modelo antes de la campaña.

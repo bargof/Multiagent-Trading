@@ -24,35 +24,43 @@ Proyecto final del Módulo 4 · Diplomado en AI & LLMs para Mercados Financieros
 
 Ninguna ruta se ha ejecutado todavía con modelos reales. No hay resultados
 observados: las 23 trazas de `--probar-evaluador` son pruebas del evaluador,
-no ejecuciones del sistema.
+no ejecuciones del sistema. La integración con Gemini está probada con un
+cliente falso, sin red ni cuota.
 
 ---
 
-## Configurar las API keys
+## Configurar la API key
 
-Hay dos variables obligatorias, una por proveedor (decisión D22):
+Hay una variable obligatoria, `GOOGLE_API_KEY`, con una key de la API de
+Gemini (decisión D47). La usan los agentes A0–A4 (gemini-3.6-flash) y el juez
+J1/J2 (gemini-3.8-flash). El juez es otro modelo para no calificar salidas
+del suyo, aunque comparte proveedor.
 
-- `OPENAI_API_KEY`, para los agentes A0–A4 (gpt-4.1-mini);
-- `ANTHROPIC_API_KEY`, para el juez J1/J2 (claude-sonnet-5-5).
+La key se crea gratis en [Google AI Studio](https://aistudio.google.com/apikey)
+y va en tu equipo, nunca en el código ni en el chat. Tienes dos opciones:
 
-Juez y agentes son de proveedores distintos para que el juez no comparta los
-sesgos del modelo que evalúa. Las keys van en tu equipo, nunca en el código
-ni en el chat. Tienes dos opciones:
-
-**Archivo `.env`** (recomendado). Copia la plantilla y escribe las keys en
-`.env`. Ese archivo está en `.gitignore` y no entra al ZIP de entrega.
+**Archivo `.env`** (recomendado). Copia la plantilla y escribe la key en
+`.env`. Ese archivo está en `.gitignore` y no entra al ZIP de entrega. Si ya
+tenías un `.env` de la plantilla anterior, sobrescríbelo: las variables de
+OpenAI y Anthropic ya no se usan.
 
 ```powershell
 Copy-Item .env.example .env
 notepad .env
 ```
 
-**Variables de sesión**, solo para la terminal abierta:
+**Variable de sesión**, solo para la terminal abierta:
 
 ```powershell
-$env:OPENAI_API_KEY = "sk-..."
-$env:ANTHROPIC_API_KEY = "sk-ant-..."
+$env:GOOGLE_API_KEY = "..."
 ```
+
+**Cuota.** La capa gratuita limita las llamadas por minuto y por día, por
+modelo. Los límites de tu proyecto se ven en AI Studio. El sistema va a 8
+llamadas por minuto por modelo (`GEMINI_RPM` lo cambia). En esa capa, Google
+usa lo que recibe para mejorar sus productos; los datos del proyecto son
+ficticios. Ninguna prueba usa la key: `tests/conftest.py` la borra y corta la
+red (decisión D50).
 
 ---
 
@@ -60,13 +68,15 @@ $env:ANTHROPIC_API_KEY = "sk-ant-..."
 
 ```powershell
 py -3.12 -m venv .venv
-.venv\Scripts\python -m pip install langchain==1.4.7 langchain-openai==1.7.3 langchain-anthropic==1.7.6 langgraph==1.2.18 openai==3.39.0 anthropic==1.17.0 pydantic==2.14.1
+.venv\Scripts\python -m pip install langchain==1.4.7 langchain-google-genai==4.4.2 google-genai==2.33.0 langgraph==1.2.18 pydantic==2.14.1
 .venv\Scripts\python proyecto_multiagente.py --verificar
 ```
 
-`--verificar` comprueba la versión de Python, las versiones fijadas, las
-huellas de la clave del evaluador y, para cada modelo, su disponibilidad,
-una llamada de texto, una llamada a herramienta y una salida estructurada.
+`--verificar` comprueba la versión de Python, las versiones fijadas y las
+huellas de la clave del evaluador. Después gasta dos llamadas de la cuota:
+- una del modelo de agentes con todos los esquemas del sistema, para que la
+  API los valide y el modelo llame una herramienta;
+- una de texto del modelo juez.
 
 Un caso de desarrollo, fuera de la campaña oficial:
 
@@ -106,7 +116,8 @@ Pruebas deterministas, sin modelo ni red:
 ```
 proyecto_multiagente.py   entregable 1: sistema y evaluación en un solo archivo
 tests/unit/               pruebas deterministas: contratos, datos, clave,
-                          herramientas, Mesa, grafo y evaluador
+                          herramientas, Mesa, grafo, evaluador y Gemini
+tests/conftest.py         ninguna prueba sale a la red ni usa la key
 tests/guion.py            reexporta el modelo de guion del ejecutable, para
                           probar el grafo sin red
 docs/decisiones.md        sección 10 para el documento de trabajo: decisiones

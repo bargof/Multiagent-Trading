@@ -16,7 +16,6 @@ from proyecto_multiagente import (
     CriterioTrayectoria,
     huella,
     huellas_campana,
-    proveedor_de,
 )
 
 # Conteos de la sección 2: (eventos evaluados, de los cuales herramientas).
@@ -108,35 +107,35 @@ def test_jueces_con_tres_criterios():
 
 
 def test_huellas_estables_y_sensibles():
-    config = Configuracion(modelo="m", modelo_juez="claude-j", temperatura=0.0)
-    otra = Configuracion(modelo="otro", modelo_juez="claude-j", temperatura=0.0)
+    config = Configuracion(modelo="m", modelo_juez="j")
+    otra = Configuracion(modelo="otro", modelo_juez="j")
     assert huellas_campana(config) == huellas_campana(config)
     assert (
         huellas_campana(config)["configuracion"]
         != huellas_campana(otra)["configuracion"]
     )
+    # El ritmo no cambia lo que ven los modelos: no es otro experimento.
+    lenta = Configuracion(modelo="m", modelo_juez="j", llamadas_por_minuto=2)
+    assert huellas_campana(lenta) == huellas_campana(config)
     assert huella({"a": 1}) != huella({"a": 2})
     assert huella({"a": 1, "b": 2}) == huella({"b": 2, "a": 1})
 
 
 def test_las_api_keys_no_entran_en_las_huellas(monkeypatch):
-    config = Configuracion(modelo="m", modelo_juez="claude-j", temperatura=0.0)
-    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
-    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    config = Configuracion(modelo="m", modelo_juez="j")
     sin = huellas_campana(config)
-    monkeypatch.setenv("OPENAI_API_KEY", "sk-prueba")
-    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-prueba")
+    monkeypatch.setenv("GOOGLE_API_KEY", "AIza-prueba")
     assert huellas_campana(config) == sin
-    assert "sk-" not in repr(config)
+    assert "AIza" not in repr(config)
 
 
-def test_cada_modelo_pide_la_key_de_su_proveedor(monkeypatch):
-    """Decisión D22: agentes con OpenAI y juez con Anthropic."""
+def test_una_sola_key_para_agentes_y_juez(monkeypatch):
+    """Decisión D47: Gemini para todo, con un modelo distinto para el juez."""
     config = Configuracion.desde_entorno()
-    assert proveedor_de(config.modelo) == "openai"
-    assert proveedor_de(config.modelo_juez) == "anthropic"
-    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
-    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
-    assert config.keys_faltantes() == ["ANTHROPIC_API_KEY", "OPENAI_API_KEY"]
-    monkeypatch.setenv("OPENAI_API_KEY", "sk-prueba")
-    assert config.keys_faltantes() == ["ANTHROPIC_API_KEY"]
+    assert config.modelo.startswith("gemini-")
+    assert config.modelo_juez.startswith("gemini-")
+    assert config.modelo != config.modelo_juez
+    assert config.temperatura is None, "Gemini 3.6 en adelante no la admite"
+    assert config.keys_faltantes() == ["GOOGLE_API_KEY"]
+    monkeypatch.setenv("GEMINI_API_KEY", "AIza-prueba")
+    assert config.keys_faltantes() == []

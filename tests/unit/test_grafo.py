@@ -6,12 +6,11 @@ pruebas de infraestructura (sección 7.2). No dicen nada sobre lo que pediría
 un modelo real; eso lo mide la campaña.
 """
 
+import time
+from dataclasses import replace
 from decimal import Decimal
 
-import httpx2
-import openai
-import pytest
-from langchain_core.utils.function_calling import convert_to_openai_tool
+import httpx
 
 from proyecto_multiagente import (
     DELEGACIONES,
@@ -26,7 +25,6 @@ from proyecto_multiagente import (
     R5,
     R6,
     RUTAS,
-    SALIDAS,
     ClaseEvento,
     ejecutar_caso,
     pide_movimiento,
@@ -469,7 +467,7 @@ def test_quinta_herramienta_de_un_especialista_cierra_el_caso():
 
 
 def test_un_reintento_registrado_por_fallo_de_transporte():
-    caida = openai.APIConnectionError(request=httpx2.Request("POST", "https://x"))
+    caida = httpx.ConnectError("sin red")
     a0 = [
         pide(
             "consultar_noticias", empresa="XYZ", tarea="N1", id="N1", fecha_corte="T0"
@@ -507,7 +505,19 @@ def test_evidencia_no_observada_se_descarta():
     assert descarte.resultado["fuentes"] == ["N7", "F1"]
 
 
-def test_llamadas_simultaneas_se_registran():
+def test_llamadas_simultaneas_se_registran_y_se_ejecutan_en_orden(monkeypatch):
+    """Decisión D49: Gemini no deja pedir una herramienta por turno, así que
+    las de un mismo turno se ejecutan de una en una y en el orden pedido. La
+    primera tarda: en paralelo, la segunda terminaría antes."""
+    original = HERRAMIENTAS["consultar_portafolio"]
+
+    def lenta(entorno, args):
+        time.sleep(0.2)
+        return original.funcion(entorno, args)
+
+    monkeypatch.setitem(
+        HERRAMIENTAS, "consultar_portafolio", replace(original, funcion=lenta)
+    )
     r = correr(
         R3.entrada,
         A0=a0_delega_portafolio(100, "calculo_hipotetico"),
@@ -521,8 +531,13 @@ def test_llamadas_simultaneas_se_registran():
         ],
     )
     assert controles(r, "llamadas_simultaneas")
-    seqs = [e.seq for e in r.traza.de_clase(ClaseEvento.HERRAMIENTA)]
-    assert len(seqs) == len(set(seqs)) == 3
+    portafolio, precio, exposicion = r.traza.de_clase(ClaseEvento.HERRAMIENTA)
+    assert [portafolio.nombre, precio.nombre] == [
+        "consultar_portafolio",
+        "consultar_precio",
+    ]
+    assert portafolio.fin <= precio.inicio, "la segunda esperó a la primera"
+    assert portafolio.seq < precio.seq < exposicion.seq
 
 
 def test_cada_caso_empieza_limpio():
@@ -564,18 +579,6 @@ def test_los_prompts_no_contienen_la_clave():
     for texto in textos:
         for valor in prohibidos:
             assert valor not in texto, valor
-
-
-@pytest.mark.parametrize("agente", ["A0", "A1", "A2", "A3", "A4"])
-def test_esquemas_que_ve_el_modelo_se_pueden_enviar(agente):
-    from proyecto_multiagente import Caso
-
-    caso = Caso("x", "r", modelo_para=lambda _: None)
-    for herramienta in caso._herramientas_para(agente):
-        convertida = convert_to_openai_tool(herramienta)
-        assert convertida["function"]["name"] == herramienta.name
-    salida = convert_to_openai_tool(SALIDAS[agente])
-    assert salida["function"]["name"] == SALIDAS[agente].__name__
 
 
 def test_las_cifras_del_resultado_salen_de_la_traza():

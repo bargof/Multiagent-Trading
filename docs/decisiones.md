@@ -2,8 +2,10 @@
 
 Complemento a la versión 0.3 del documento de trabajo. La versión 0.3 cierra
 el diseño, pero implementarlo obliga a precisar detalles que el documento no
-fija, y en un caso a cambiar una decisión (D22). Las decisiones D36 a D46,
-del Bloque 4, fijan cómo el evaluador compara trayectorias y resultados. Todas se registran **antes**
+fija, y en dos casos a cambiar una decisión (D22, que luego reemplaza D47).
+Las decisiones D36 a D46, del Bloque 4, fijan cómo el evaluador compara
+trayectorias y resultados. D47 a D50 cambian el proveedor a Gemini, por su
+capa gratuita. Todas se registran **antes**
 de ejecutar cualquier ruta de la campaña, para que ninguna se pueda leer como
 un ajuste hecho después de ver resultados. Cuando una decisión de esta
 sección contradice una anterior del documento, prevalece la de esta sección.
@@ -155,9 +157,10 @@ que no cita fuentes que no observó.
 
 ## Bloque 3
 
-**D22. Agentes con OpenAI y juez con Anthropic.** Cambia la sección 3.1, que
-usaba gpt-4.1-mini para agentes y juez. Los agentes siguen con gpt-4.1-mini
-(`MODEL_NAME`). El juez pasa a claude-sonnet-5-5 (`JUDGE_MODEL`).
+**D22. Agentes con OpenAI y juez con Anthropic.** *Reemplazada por D47.*
+Cambia la sección 3.1, que usaba gpt-4.1-mini para agentes y juez. Los
+agentes siguen con gpt-4.1-mini (`MODEL_NAME`). El juez pasa a
+claude-sonnet-5-5 (`JUDGE_MODEL`).
 
 - *Motivo.* La sección 3.1 reconocía que un juez del mismo modelo «no es
   independiente en sus sesgos». Con otro proveedor, el juez no comparte el
@@ -244,9 +247,10 @@ una propuesta con incumplimientos, prevalece la validación: la decisión pasa a
 - Un middleware intercepta cada llamada antes de que LangChain la valide,
   incluidas las que traen argumentos inválidos o nombran una herramienta
   inexistente. Si no, esos intentos nunca llegarían a la traza.
-- Se pide una herramienta por turno (`parallel_tool_calls=False`), porque la
-  versión 1 no tiene paralelismo. Si un modelo pide varias en un mismo turno,
-  se registra un control `llamadas_simultaneas`.
+- *Cambiado por D49.* Se pide una herramienta por turno
+  (`parallel_tool_calls=False`), porque la versión 1 no tiene paralelismo. Si
+  un modelo pide varias en un mismo turno, se registra un control
+  `llamadas_simultaneas`.
 
 **D29. Salidas estructuradas con una sola reparación.** Operacionalización de
 la sección 5.2. Cada agente entrega su salida como una llamada a herramienta
@@ -494,13 +498,98 @@ campaña terminado. La campaña compara después las huellas por componente.
 
 ---
 
+## Cambio de proveedor
+
+**D47. Gemini para agentes y juez.** Nueva; reemplaza a D22 y cambia la
+sección 3.1. Los agentes usan gemini-3.6-flash (`MODEL_NAME`). El juez usa
+gemini-3.8-flash (`JUDGE_MODEL`).
+
+- *Motivo.* No hay keys de pago. Gemini tiene una capa gratuita con una sola
+  key de Google AI Studio, y sus modelos Flash llaman herramientas y entregan
+  salida estructurada.
+- *Por qué 3.6 y no 3.8 para los agentes.* langchain-google-genai 4.4.2 trata
+  3.6 de forma explícita: sabe que no admite muestreo propio y conoce sus
+  niveles de razonamiento. Para 3.8, la guía de Google pide que cada
+  respuesta de función lleve el identificador de su llamada, y la librería
+  4.4.2 no lo envía. Saber si eso hace fallar la petición exige gastar cuota.
+  El juez no usa funciones, así que en él 3.8 no corre ese riesgo.
+- *Independencia del juez.* La sección 3.1 advertía que un juez del mismo
+  modelo no es independiente en sus sesgos, y D22 lo resolvía con otro
+  proveedor. Con un solo proveedor queda la mitad de la solución: el juez no
+  califica salidas de su mismo modelo, pero comparte proveedor y,
+  probablemente, parte del entrenamiento. Es un límite que el informe debe
+  discutir.
+- *Privacidad.* En la capa gratuita, Google usa lo que se le envía para
+  mejorar sus productos. Los datos del proyecto son ficticios. No se deben
+  enviar datos reales.
+- *Consecuencia.* Una sola variable obligatoria, `GOOGLE_API_KEY`; también se
+  acepta `GEMINI_API_KEY`, que la librería lee si falta la primera.
+- *Dependencias.* langchain-google-genai 4.4.2 y google-genai 2.33.0
+  sustituyen a langchain-openai, langchain-anthropic, openai y anthropic.
+  langchain-core sigue en 1.7.0. La versión con OpenAI y Anthropic queda en
+  el commit 07a2254.
+
+**D48. Sin temperatura y con razonamiento fijo.** Literal de la sección 3.1,
+que pide temperatura 0 «cuando el modelo la admita».
+- Gemini 3.6 en adelante ya no admite `temperature`, así que no se envía. La
+  huella de configuración la registra como `null`.
+- El nivel de razonamiento se fija en `medium`, el que Google recomienda para
+  agentes, en vez de heredar el predeterminado del proveedor, que podría
+  cambiar entre campañas. Entra en la huella.
+- *Consecuencia.* Sin temperatura 0, lo esperable es más variación entre
+  repeticiones. La campaña la muestra en vez de esconderla: tres
+  repeticiones por ruta y el peor resultado de cada una (sección 2.8).
+
+**D49. Las herramientas de un mismo turno se ejecutan en orden, de una en
+una.** Operacionalización; cambia D28.
+- Gemini no permite pedir una herramienta por turno: con
+  `parallel_tool_calls` la petición se rechaza antes de salir.
+- Cada agente se invoca con `max_concurrency=1`. Si el modelo pide varias
+  herramientas en un turno, LangGraph las ejecuta en el orden pedido, una
+  tras otra.
+- Antes corrían en hilos a la vez, y su orden en la traza dependía de cuál
+  terminaba primero. Una prueba con la primera herramienta lenta lo mostró:
+  la segunda terminaba antes.
+- El control `llamadas_simultaneas` se sigue registrando. La regla vale
+  también para las delegaciones de A0.
+
+**D50. Uso de la cuota gratuita.** Nueva.
+- *Ritmo.* Cada modelo tiene un limitador que comparten todas sus
+  instancias, porque la cuota es por modelo y por proyecto. Por omisión son
+  8 llamadas por minuto; se cambia con `GEMINI_RPM`. Google ya no publica una
+  tabla de límites: cada proyecto los ve en AI Studio. El ritmo no entra en
+  las huellas, porque no cambia lo que ven los modelos.
+- *Reintento.* El único reintento de D30 cubre los 429, los 5xx (incluido el
+  503 de modelo saturado), los timeouts y los cortes de red. Antes de
+  reintentar se esperan 10 s (`pausa_reintento_s`, entre los límites). Un 400
+  no se reintenta, porque es un error del programa y no del modelo.
+- *Las pruebas no gastan cuota.* `tests/conftest.py` borra las keys y corta
+  httpx en cada prueba: si algo intentara salir a la red, la prueba falla.
+  La integración se prueba con un cliente falso que ocupa el lugar del SDK
+  de Google. Así las seis rutas de referencia pasan por la conversión real
+  de langchain-google-genai: esquemas, firmas de pensamiento, respuestas de
+  función y errores.
+- *Verificación.* `--verificar` gasta dos llamadas:
+  - la de los agentes declara los 19 esquemas del sistema más una
+    herramienta de eco, y la API valida todas las declaraciones;
+  - la del juez es una llamada de texto.
+
+  Consultar si un modelo existe no gasta cuota de generación.
+- *Presupuesto.* Con los guiones de referencia, la campaña necesita al menos
+  129 llamadas: 123 de agentes y 6 del juez. Con modelos reales serán más,
+  hasta un tope de 40 por caso (720 en las 18 ejecuciones). A 8 por minuto,
+  son al menos 16 minutos de campaña.
+
+---
+
 ## Pendientes
 
-- **Proveedor del modelo.** Las keys de pago no están disponibles. Si se
-  cambia a un proveedor con plan gratuito, la decisión reemplaza a D22 y debe
-  registrarse antes de congelar.
-- **Prueba con modelos reales** (cierre del Bloque 3). Falta una consulta de
-  desarrollo y un bloqueo con modelos reales, y comprobar ambos con
-  `--verificar`.
-- **Congelación** (D46). Se hace cuando estén decididos los modelos y
-  terminado el código de la campaña (Bloque 5).
+- **Prueba con modelos reales** (cierre del Bloque 3). Para cuidar la cuota,
+  se reduce a `--verificar` (dos llamadas) y una consulta de desarrollo justo
+  antes de la campaña.
+- **Cuota diaria.** Antes de la campaña hay que ver en AI Studio el límite
+  diario de cada modelo. Si no alcanza para unas 250 llamadas, el ejecutor
+  del Bloque 5 debe detenerse al agotarla y reanudar otro día sin repetir
+  las ejecuciones ya hechas. Todas se reportan, también las que fallen.
+- **Congelación** (D46). Se hace cuando esté terminado el código de la
+  campaña (Bloque 5).
