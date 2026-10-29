@@ -1,0 +1,11 @@
+[theme]
+base = "light"
+primaryColor = "#1D4ED8"
+baseRadius = "6px"
+showWidgetBorder = true
+
+[server]
+runOnSave = false
+
+[browser]
+gatherUsageStats = false

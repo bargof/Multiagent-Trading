@@ -597,3 +597,188 @@ modelo (D58).
 
 - [ ] La revisión humana en `revision.md`; después, `scripts/informe.py` y
   `scripts/empacar.py`.
+
+---
+
+## Bloque 7 · 29 de octubre de 2026
+
+Aplicación sobre el Reto Actinver (D59–D70). Paquetes nuevos en el entorno:
+streamlit 1.66.1, yfinance 1.7.0, feedparser 6.0.14, pandas 3.1.0 y
+openpyxl 3.1.5.
+
+**Fuentes, con llamadas reales y sin Gemini.**
+- *Precios.* Los cierres del Excel del reto del 23 de octubre coinciden con
+  yfinance con un error relativo menor a 1e-15. Bajar las 226 emisoras más
+  `MXN=X` tarda unos 5 s. 12 emisoras ya no tienen datos en Yahoo; 214 sí.
+- *Noticias.* Google News RSS responde en español con medio, fecha y liga;
+  el resumen viene vacío. La primera búsqueda de «Banorte» trajo noticias
+  del estadio. Con contexto financiero en la consulta, los titulares de
+  GFNORTEO, AAPL y WALMEX pasaron a ser de la BMV, de analistas y del reporte
+  trimestral.
+- *Reportes.* yfinance trae trimestres de WALMEX, AMXB, FEMSAUBD, AAPL, NVDA
+  y GFNORTEO. A WALMEX le falta 2025Q3, así que se compara contra 2026Q2
+  (D70).
+- *Tipo de cambio.* El Excel no lo trae. Sin él, la primera valuación de la
+  cartera falló. Ahora se importa USDMXN desde 2024 y, si falta, el precio
+  queda vacío.
+
+**Recorrido sin comité**, con una cartera de prueba en una base temporal (no
+en `data/comite.db`). Tardó 13 s:
+- 13 situaciones: 2 de concentración (AAPL 42%, NVDA 34%), 5 de noticias, 2
+  de reporte y 4 destacadas;
+- 2 ventas por regla, para regresar AAPL y NVDA al 30%.
+
+**Casos reales con Gemini** (gemini-3.5-flash-lite, 40 llamadas en
+total).
+- *Noticias de WALMEX (tipo R1).* 4 llamadas, 28 s, informativo. A0 delegó
+  en A1 con `N-WALMEX` y A1 leyó el resumen de titulares.
+- *Propón comprar 200 FEMSAUBD (tipo R6) con AAPL y NVDA arriba de 30%.*
+  12 llamadas, 92 s. A1 leyó titulares, A2 calculó indicadores de
+  F-FEMSAUBD-2026Q3 (ingresos +9.8%) y A3 consultó la cartera.
+  - A4 la **bloqueó** por LIMITE_CONCENTRACION. `validar_propuesta` mide
+    toda la cartera resultante, no solo la emisora comprada.
+  - De aquí salió la regla de no buscar oportunidades mientras haya una
+    posición excedida (D64).
+- *Ciclo completo.* Aprobé y registré las dos ventas; las boletas se
+  generaron con precio límite −0.5%. AAPL quedó en 29.8% y NVDA en 29.9%.
+  - Repetí la propuesta de FEMSAUBD: **pendiente de revisión humana**, A4
+    conforme y concentración resultante de 1.97%.
+  - Se guardó como recomendación, la aprobé y salió la boleta de compra.
+- *Recorrido con comité, 2 análisis.* Las noticias de NVDA y AAPL salieron
+  como sentimiento «mixto» y la regla recomendó mantener. Las leí y son
+  mixtas, por ejemplo la investigación del DOJ a Nvidia contra su inversión
+  en Meta. Ajusté la razón para que diga el sentimiento, y titulares mixtos
+  con caída ahora piden vigilar (D67).
+
+**App.** `AppTest` abre las cinco páginas sin excepciones con la base de
+prueba.
+
+**Pruebas deterministas.** `tests/app/test_comite.py`, 23 pruebas, sin red ni
+cuota:
+- Las fuentes se inyectan y el comité corre con el modelo de guion del
+  ejecutable.
+- Cubren la valuación en pesos y el libro, que no permite corto ni
+  apalancamiento.
+- Cubren las reglas del vigía y que no se duplique una situación, y que el
+  `DatosSimulados` real lo acepten las herramientas del comité.
+- Cubren los flujos de noticia, compra conforme, compra bloqueada,
+  aprobación, boleta, registro, deriva de precio, tenencia y expiración.
+
+Están en `tests/app/` y no en `tests/unit/`, para que el ZIP de entrega no
+lleve pruebas de un paquete que no incluye. `pytest` completo: 303
+aprobadas. `ruff check` y `ruff format --check` quedan limpios.
+`proyecto_multiagente.py` conserva el SHA-256 de la congelación.
+
+---
+
+## Bloque 8 · 29 de octubre de 2026
+
+Estrategia validada, A2 con reporte completo, calendario y monitor
+(D71–D75). Sin llamadas a Gemini.
+
+**Backtest** (`python -m comite backtest`, unos 4 s con 214 emisoras).
+- La primera corrida salió solo con la BMV: la base venía del Excel, sin
+  USDMXN, y las 159 del SIC no tenían precio en pesos. Lo encontró la prueba
+  que compara la elección del criterio con la de `config`. La repetí con los
+  datos de D71; ahora el backtest no corre sin tipo de cambio.
+- Con el SIC, el criterio elige C4 (15 emisoras, 120 sesiones, filtro de
+  tendencia). En la prueba: +49.2% contra +14.8% del Agresivo, con caída
+  máxima de −20.1% contra −6.8%. La regla de D64 dio −16.5%. Las cifras
+  completas están en D72.
+- Revisé lo que compra en cada rebalanceo. Son acciones reales y volátiles
+  (MU, MRNA, PLTR, SOFI, RIOT), sin ETFs apalancados. Los saltos de más de
+  40% en un día son eventos de mercado, no errores de captura.
+
+**Fuentes nuevas, con llamadas reales.**
+- *Balance y flujo.* yfinance responde en menos de un segundo por emisora.
+  WALMEX y AAPL traen las 11 partidas. GFNORTEO no trae utilidad bruta,
+  operativa ni EBITDA, y la nota lo dice.
+- *Calendario.* También tarda menos de un segundo: AAPL el 2 de noviembre,
+  GFNORTEO el 3 y NVDA el 17. Para WALMEX da el 27 de octubre, que ya pasó.
+- *Una lectura colgada.* Una prueba de yfinance que pedía varias cosas a la
+  vez se quedó colgada más de 3 minutos. Ahora cada lectura de red tiene un
+  límite de tiempo.
+- *La nota de A2.* La leí para las tres emisoras. La utilidad neta de
+  GFNORTEO de 2025Q2 en Yahoo da una variación de +2,420%; ahora la nota la
+  marca como atípica.
+
+**Una vuelta del monitor** en una base temporal (no en `data/comite.db`),
+con una cartera de prueba de WALMEX, GFNORTEO, AAPL, NVDA y efectivo, y la
+estrategia C4. Tardó 13 s:
+- 214 emisoras con precio al 29 de octubre;
+- 4 reportes con balance y flujo, y 4 fechas de calendario;
+- un objetivo de 15 emisoras, hoy todas del SIC;
+- 4 ventas por regla, y 5 compras al comité, las que alcanza el efectivo. Las
+  otras 10 esperan a que se registren las ventas.
+
+Al revisar el plan encontré dos problemas y los corregí:
+- se recalculaba en cada vuelta, y un movimiento normal de precio habría
+  pedido ajustes a media semana. Ahora las órdenes se fijan al empezar el
+  ciclo;
+- con 2 análisis por vuelta, el comité habría gastado la cuota en noticias de
+  emisoras que la estrategia vende. Ahora las compras de la estrategia van
+  antes.
+
+**App.** `AppTest` abre las seis páginas sin excepciones sobre esa base. La
+página Estrategia tarda unos 4.5 s la primera vez, por el backtest en caché,
+y con los datos de la app el criterio elige lo mismo que con la copia del
+repo.
+
+**Pruebas deterministas.** `tests/app/test_estrategia.py` tiene 25 pruebas
+nuevas que cubren:
+- la elección de la estrategia, el efectivo que sobra y la exclusión de
+  ETFs apalancados;
+- que el backtest no vea el cierre del día en que opera, la comisión y el
+  criterio de D71;
+- que la elección del protocolo con los datos del repo sea la de `config` y
+  que el backtest no corra sin tipo de cambio;
+- el ciclo de rebalanceo: ventas por regla, compras que esperan efectivo,
+  órdenes fijas y cambio de estrategia;
+- los indicadores, la nota y las alertas;
+- que A2 lea la nota dentro de su límite de 4 herramientas, con el modelo de
+  guion;
+- el freno a la compra con deterioro, el calendario y el límite de tiempo de
+  red;
+- la migración de una base del bloque 7, el horario del monitor y su tope de
+  cuota.
+
+`pytest` completo: 328 aprobadas. `ruff check` y `ruff format --check`
+quedan limpios. `proyecto_multiagente.py` conserva el SHA-256 de la
+congelación.
+
+**Falta.** Probar con Gemini que A0 pida la nota y que A2 la lea y la
+interprete; con el modelo de guion sí funciona.
+
+### Escenarios de A3 (D76)
+
+**Con datos reales.** Usé una copia de la base de la vuelta del monitor
+(cartera de prueba: AAPL, GFNORTEO, NVDA, WALMEX y $300,000 en efectivo), sin
+red ni key:
+- E3 es del 13 de mayo al 10 de junio de 2026, cuando esas cuatro cayeron
+  6.29% juntas. En esas fechas MRNA cayó 7.59%.
+- E4 es del 31 de diciembre de 2025 al 29 de enero de 2026, cuando el dólar
+  bajó de 17.98 a 17.15 pesos (−4.61%).
+- E5 de MRNA es del 6 de julio al 3 de agosto de 2026: −33.26%.
+
+Hoy la cartera perdería 6.52% en E2, 3.79% en E3 y 1.92% en E4. Comprar 100
+MRNA sumaría $31,846 en E3, $19,343 en E4 y $139,552 en E5.
+
+**App.** `AppTest` abre Qué hacer y Cartera sin excepciones. La tarjeta de
+compra trae el desplegable «Estrés de la compra» y Cartera la tabla de lo que
+tienes.
+
+**Pruebas deterministas.** Agregué 6 a `tests/app/test_estrategia.py`:
+- el peor tramo da las fechas y el cambio correctos;
+- E3 toma las fechas del peor mes de la cartera, y E4 solo choca al SIC;
+- E5 toma el peor mes de la emisora, y sin SIC no hay E4;
+- una compra que subió en el peor mes resta pérdida;
+- A3 simula los cinco escenarios en una sola llamada con la herramienta
+  real, y sus cifras coinciden con las de la app; A0 ve los títulos sin
+  cifras;
+- sin historia suficiente solo quedan E1 y E2.
+
+`pytest` completo: 334 aprobadas. `ruff` queda limpio y la huella del
+ejecutable no cambia.
+
+**Falta.** Probar con Gemini que A0 pida los escenarios y que A3 los simule
+en una sola llamada.

@@ -21,12 +21,135 @@ Proyecto final del Módulo 4 · Diplomado en AI & LLMs para Mercados Financieros
 | 4 | Evaluador, juez y congelación | Hecho y probado con trazas sintéticas; la congelación espera los modelos |
 | 5 | Campaña: R1–R5 ×3, R6 ×3 aparte | Hecho: campaña 20261027-145758, 9 de 15 obligatorias y 2 de 3 en R6 |
 | 6 | PDF de resultados, diagrama y ZIP | Hecho: entregables en `dist/`; falta la revisión humana |
+| 7 | Aplicación sobre el Reto Actinver: datos reales, base de datos, vigía, recomendaciones, ejecución asistida y app | Hecho: ver [la aplicación](#la-aplicación-sobre-el-reto-actinver) |
+| 8 | Estrategia validada con el historial del reto, A2 con reporte completo, A3 con escenarios históricos, calendario y monitor | Hecho; falta probar con Gemini que A2 lea la nota y A3 simule los escenarios nuevos |
 
 La campaña oficial es `reports/campanas/20261027-145758`, con
 gemini-3.5-flash-lite para los agentes y gemini-3.1-flash-lite para el juez.
 Las 23 trazas de `--probar-evaluador` son pruebas del evaluador, no
 ejecuciones del sistema. La integración con Gemini y el ejecutor de la
 campaña están probados con un cliente falso, sin red ni cuota.
+
+---
+
+## La aplicación sobre el Reto Actinver
+
+El mismo comité, sin cambiar una línea de `proyecto_multiagente.py`, trabaja
+sobre mi cuenta del Reto Actinver con datos reales. La huella del archivo
+sigue siendo la de la congelación, así que la evaluación de arriba sigue
+valiendo para el sistema que usa la app.
+
+```powershell
+.venv\Scripts\python -m pip install streamlit==1.66.1 yfinance==1.7.0 feedparser==6.0.14 pandas==3.1.0 openpyxl==3.1.5
+.venv\Scripts\streamlit run streamlit_app.py
+```
+
+La primera vez importa el universo del reto (214 emisoras con datos), su
+historial desde 2024, los benchmarks Conservador, Moderado y Agresivo y el
+tipo de cambio. Después se captura la cartera en la página **Cartera**.
+
+```
+fuentes gratuitas          vigía (reglas)          comité (A0–A4)         tú
+yfinance: precios, FX ─┐   concentración >30% ─┐   noticias, reporte, ─┐  apruebas
+Google News: titulares ├─▶ estrés E1, caídas,  ├─▶ cálculo, propuesta  ├─▶ capturas en el reto
+yfinance: trimestres, ─┘   noticias, reportes, ┘   y revisión de riesgo┘  registras el folio
+  balance, flujo,          calendario, destacadas,
+  calendario               rebalanceo de la estrategia
+```
+
+| Página | Qué hace |
+|---|---|
+| Qué hacer | Indicadores contra los benchmarks, el botón **Recorrer todo el proceso** y las compras o ventas por aprobar, con su boleta para el simulador |
+| Cartera | Posiciones en pesos, estrés de la cartera, rendimiento en base 100 contra los benchmarks, captura de la cuenta y libro de operaciones |
+| Estrategia | Eliges la estrategia; ves su cartera objetivo, las órdenes del ciclo y el backtest de entrenamiento y prueba |
+| Situaciones | Lo que detectó el vigía; cada una se puede mandar al comité |
+| Comité | Chat con preguntas como las rutas R1–R6; una propuesta conforme se guarda como recomendación |
+| Bitácora | Cada caso con su solicitud, los datos que vio el comité, la respuesta y la trayectoria |
+
+**Base de datos** (`data/comite.db`, SQLite). Tres tablas principales:
+`operaciones` (la cartera como libro; las posiciones salen de la vista
+`posiciones`), `situaciones` (lo que pasa a lo largo del tiempo, en la
+cartera y fuera de ella) y `recomendaciones` (qué hacer, de dónde salió y en
+qué estado va: propuesta → aprobada → ejecutada). Las apoyan `emisoras`,
+`precios`, `benchmarks`, `documentos` y `ejecuciones_comite`.
+
+**Quién decide qué.** Las compras las propone el comité y pasan por A4 y la
+validación determinista, igual que en la evaluación. Las ventas salen de
+reglas fijas, porque el comité solo sabe proponer compras:
+- concentración arriba de 30%;
+- noticia negativa con caída de 5% o más;
+- el rebalanceo de la estrategia.
+
+Cada recomendación dice si viene del comité o de una regla.
+
+**La estrategia** (D71 y D72). Probé cinco reglas de momentum con el
+historial del reto, con candidatos y criterio fijados antes de correr. El
+criterio de entrenamiento eligió las 15 emisoras con mayor rendimiento de 120
+sesiones que estén arriba de su media de 200, rebalanceando cada 60.
+
+| Del 1 de octubre de 2025 al 23 de octubre de 2026 | Rendimiento | Caída máxima | Volatilidad |
+|---|---|---|---|
+| Estrategia elegida | +49.2% | −20.1% | 36.9% |
+| Igual peso en todo el reto | +13.3% | −6.3% | 15.0% |
+| Agresivo | +14.8% | −6.8% | 9.9% |
+| La regla que usaba antes | −16.5% | −42.4% | 55.7% |
+
+Rinde más con mucho más riesgo, y el resultado depende de pocas emisoras. Por
+eso no se activa sola: la eliges en la página **Estrategia**. Cada ciclo:
+- las ventas son de la regla;
+- las compras pasan por el comité, con noticias y reporte;
+- tú apruebas cada orden.
+
+**A2 ve más del reporte** (D73). Además de ingresos y utilidad operativa, el
+reporte trae balance y flujo de efectivo. Una nota con indicadores calculados
+lleva márgenes, flujo libre, deuda neta entre EBITDA, rendimiento sobre
+capital y valuación. A2 la lee con su herramienta de notas, sin cambiar el
+ejecutable.
+
+**A3 simula con la historia del reto** (D76). Además de las caídas planas de
+10% (E1 y E2), simula tres escenarios con precios reales del último año:
+- E3, el peor mes de tu cartera, con lo que hizo cada emisora en esas fechas;
+- E4, la mayor apreciación del peso, que golpea a las del SIC;
+- E5, el peor mes de la emisora que compras.
+
+Cada compra muestra cuánto sumaría o restaría a la pérdida en cada uno, y la
+página Cartera muestra el estrés de lo que tienes.
+
+**La ejecución.** El reto no tiene API y sus bases no dicen si permiten
+operar con un programa. El ejecutor no entra a la cuenta: al aprobar vuelve a
+revisar precio (±3%), efectivo, tenencia y concentración, arma la boleta, y
+cuando registro el precio y el folio la operación entra al libro.
+
+```powershell
+.venv\Scripts\python -m comite recorrer --sin-comite   # solo reglas, sin cuota
+.venv\Scripts\python -m comite preguntar "¿Qué dice el reporte de Walmex?"
+.venv\Scripts\python -m comite backtest              # la validación de D71
+.venv\Scripts\python -m comite estrategia            # muestra o elige la estrategia
+.venv\Scripts\python -m comite estado
+```
+
+**El monitor** (D74). Repite el recorrido cada 30 minutos, de lunes a viernes
+de 7:30 a 15:00. Avisa con una notificación de Windows cuando hay algo por
+aprobar y escribe en `data/monitor.log`. Cuida la cuota de dos maneras:
+- analiza 2 situaciones por vuelta;
+- deja el comité al llegar a 350 llamadas del día.
+
+```powershell
+.venv\Scripts\python -m comite vigilar                 # en una terminal abierta
+# o con el Programador de tareas, desde la carpeta del repo; fuera de horario
+# la vuelta no hace nada:
+schtasks /Create /TN ComiteReto /SC MINUTE /MO 30 /F /TR "cmd /c cd /d $PWD && .venv\Scripts\python.exe -m comite vigilar --una-vez"
+```
+
+No es day trading:
+- Yahoo trae la BMV con unos 20 minutos de retraso;
+- Google News tarda de minutos a horas;
+- cada caso del comité tarda de 30 a 150 segundos;
+- cada orden la capturo yo.
+
+Un caso del comité usa de 4 a 13 llamadas y tarda de 30 a 150 segundos. El
+recorrido analiza 4 situaciones por corrida (ajustable en la barra lateral).
+Las decisiones de esta parte son D59–D76 en `docs/decisiones.md`.
 
 ---
 
@@ -176,18 +299,36 @@ tests/gemini_falso.py     cliente falso de Gemini: la conversión real de
 docs/decisiones.md        sección 10 para el documento de trabajo: decisiones
                           que completan la especificación v0.3
 docs/pruebas.md           registro de lo verificado en cada bloque
+comite/                   la aplicación (bloques 7 y 8): base de datos,
+                          fuentes, vigía, puente al comité, recomendador,
+                          ejecutor, estrategia, backtest, indicadores,
+                          escenarios y monitor
+streamlit_app.py          la app; sus páginas están en app_pages/
+data/precios_reto.csv.gz  historial del reto desde 2024 con USDMXN
+tests/app/                pruebas de la aplicación, sin red ni cuota
 reports/                  congelación y campañas, JSON y JSONL (Bloque 5)
 scripts/                  PDF, diagrama y ZIP de entrega (Bloque 6)
 ```
 
 La rúbrica pide un solo `.py` ejecutable. Por eso el sistema vive completo en
-`proyecto_multiagente.py`, y el repo alrededor solo aporta pruebas,
-documentación y los scripts que generan los entregables.
+`proyecto_multiagente.py`, y el repo alrededor aporta pruebas, documentación,
+los scripts que generan los entregables y la aplicación, que lo importa sin
+modificarlo.
 
 ---
 
 ## Lo que NO hace
 
 No conecta un intermediario ni ejecuta operaciones: no existe herramienta para
-hacerlo. No estima rentabilidad. Los datos son ficticios, y las reglas de POL1
-son del proyecto, no del reto Actinver.
+hacerlo. No estima rentabilidad. En la evaluación los datos son ficticios, y
+las reglas de POL1 son del proyecto, no del reto Actinver.
+
+La aplicación tampoco opera sola: arma la boleta y yo la capturo. Lee
+titulares, no el cuerpo de las notas. La fecha de publicación de los reportes
+de yfinance es estimada, y el trimestre se nombra por su mes de cierre
+(el trimestre fiscal de NVDA que cierra en julio aparece como 2026Q3).
+
+La estrategia y la regla de reducción son reglas, no predicciones. Que la
+estrategia haya funcionado en un año de prueba no garantiza que funcione en
+las semanas que quedan del reto. El backtest tiene sesgo de supervivencia,
+no incluye dividendos y supone una comisión de 0.25%.

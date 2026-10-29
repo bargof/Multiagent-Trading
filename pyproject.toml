@@ -15,6 +15,14 @@ google-genai = "2.33.0"
 langgraph = "1.2.18"
 pydantic = "2.14.1"
 
+# La aplicación sobre el reto (Bloque 7). El ejecutable no las necesita.
+[tool.poetry.group.app.dependencies]
+streamlit = "1.66.1"
+yfinance = "1.7.0"
+feedparser = "6.0.14"
+pandas = "3.1.0"
+openpyxl = "3.1.5"
+
 [tool.poetry.group.dev.dependencies]
 pytest = ">=8.0"
 ruff = ">=0.5"

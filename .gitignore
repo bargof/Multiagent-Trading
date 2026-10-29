@@ -9,3 +9,9 @@ __pycache__/
 dist/
 # Archivos de compilación de LaTeX del informe y el diagrama.
 reports/build/
+# Base local de la app: cartera, situaciones y recomendaciones de cada quien.
+data/comite.db*
+data/monitor.log
+# El Excel del reto pesa 15 MB; el repo lleva la copia compacta
+# data/precios_reto.csv.gz (python -m comite importar-reto la regenera).
+Benchmarks_time_series.xlsx

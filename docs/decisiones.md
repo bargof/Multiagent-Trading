@@ -6,7 +6,9 @@ fija, y en dos casos a cambiar una decisión (D22, que luego reemplaza D47).
 Las decisiones D36 a D46, del Bloque 4, fijan cómo el evaluador compara
 trayectorias y resultados. D47 a D50 cambian el proveedor a Gemini, por su
 capa gratuita. D51 a D57, del Bloque 5, fijan cómo se corre la campaña, qué
-cuenta en ella y los modelos definitivos. Todas se registran **antes**
+cuenta en ella y los modelos definitivos. D59 a D70, del Bloque 7, son la
+aplicación sobre el Reto Actinver, posterior a la campaña. Las de los bloques
+1 a 6 se registran **antes**
 de ejecutar cualquier ruta de la campaña, para que ninguna se pueda leer como
 un ajuste hecho después de ver resultados. Cuando una decisión de esta
 sección contradice una anterior del documento, prevalece la de esta sección.
@@ -840,6 +842,373 @@ el archivo»).
   plan).
 
 ---
+
+## Bloque 7 · Aplicación sobre el Reto Actinver
+
+Estas decisiones son posteriores a la campaña oficial y no la tocan: la
+aplicación importa el ejecutable sin modificarlo. Ninguna de ellas cambia una
+ruta, una expectativa ni un veredicto.
+
+**D59. El ejecutable no cambia; la aplicación lo alimenta.** Nueva. El
+paquete `comite/` arma un `DatosSimulados` con datos reales y llama a
+`ejecutar_caso(..., datos=...)`, que ya aceptaba ese parámetro. Prompts,
+herramientas, límites, grafo y modelos son los de la campaña. La huella de
+`proyecto_multiagente.py` sigue siendo la de `reports/congelacion.json`, así
+que la evaluación describe el mismo sistema que usa la app.
+
+**D60. La cartera es un libro de operaciones.** Nueva. La base es SQLite
+(`data/comite.db`) con tres tablas principales:
+- *operaciones*: depósitos, compras y ventas. Las posiciones y el efectivo se
+  derivan con la vista `posiciones`; nunca se editan.
+- *situaciones*: lo que el vigía detecta en el tiempo, en la cartera y fuera
+  de ella, con una clave única para no repetirse.
+- *recomendaciones*: la acción, su origen (comité o regla), el dictamen y su
+  estado (informativa, propuesta, aprobada, ejecutada, rechazada, bloqueada o
+  expirada).
+
+Las apoyan `emisoras`, `precios`, `benchmarks`, `documentos` y
+`ejecuciones_comite`. Los CHECK impiden estados que el código no debe
+escribir, por ejemplo una compra sin emisora o un «mantener» pendiente de
+aprobación. El libro permite reconstruir el valor diario y compararlo con los
+benchmarks. Además, cada operación hecha por una recomendación queda ligada a
+ella.
+
+**D61. El Excel del reto es el historial y yfinance la actualización.**
+Nueva. Comparé los cierres del 23 de octubre de 2026 del Excel contra
+yfinance y coinciden; las dos son Yahoo Finance.
+- El repo lleva una copia compacta desde 2024 (`data/precios_reto.csv.gz`).
+- Las emisoras del SIC se valúan en pesos con el USDMXN del mismo día
+  (`MXN=X`), porque el Excel no trae tipo de cambio.
+- Sin tipo de cambio, el precio queda vacío, no en cero.
+- 12 de las 226 emisoras ya no tienen datos en Yahoo y el vigía no las mira.
+
+**D62. El comité ve claves sin sufijo.** Nueva. WALMEX y no WALMEX.MX:
+así lo escriben el usuario y la prensa. Si A0 tuviera que adivinar el sufijo,
+un error terminaría en UNKNOWN_ID. La base guarda las dos formas.
+
+**D63. Noticias: titulares de Google News en un solo documento por emisora.**
+Nueva.
+- La fuente es Google News RSS en español de México. No pide key, pero solo
+  trae titular, medio, liga y fecha; no extraigo el cuerpo de las notas.
+- La búsqueda lleva contexto financiero, porque «Banorte» traía noticias del
+  estadio. Si quedan menos de 3 titulares, se busca solo el nombre.
+- Para A1 los titulares van en un solo documento, `N-<clave>`, con los 6 más
+  útiles de 7 días (primero los que nombran a la emisora, sin duplicados).
+- Por qué un solo documento: A1 tiene 4 herramientas por invocación y
+  pasarse cierra el caso entero. Con un documento por titular, buscar y leer
+  cinco ya eran seis llamadas; con el resumen son dos.
+
+**D64. El vigía es determinista y sus umbrales se fijan antes de usarse.**
+Nueva. Están en `comite/config.py`.
+- *Concentración*: arriba de 30% es situación alta y regla de venta hasta el
+  límite. Entre 20% y 30% es estrés tipo E1: la pérdida si la emisora cae 10%.
+- *Precio*: una sesión de ±5% o cinco sesiones de ±10% en la cartera.
+- *Fuera de la cartera*: una emisora del reto que se mueve ±8% en el día es
+  «destacada».
+- *Oportunidad*: las 3 mejores por rendimiento de 20 sesiones, con 5 sesiones
+  positivas y precio de al menos $10. Solo aplica si el efectivo pasa de 10%
+  y ninguna posición excede el límite: con una excedida,
+  `validar_propuesta` bloquea toda compra, porque mide la cartera resultante
+  completa. Así lo encontré en la prueba real.
+- Se excluyen los ETFs apalancados o inversos.
+- El tamaño de una compra es la posición que pesaría 5%.
+- *Noticias y reportes* de la cartera: titulares de 3 días y reportes con
+  cierre de trimestre de menos de 75 días.
+
+No usa el modelo: detectar una caída es aritmética, y la cuota queda para lo
+que necesita juicio.
+
+**D65. A0 recibe la lista de identificadores, sin cifras.** Nueva. A la
+solicitud se le agrega un bloque «Contexto del sistema»: el portafolio
+RETO, las emisoras, `N-<clave>`, el reporte y su periodo, y los escenarios
+E1 y E2. Sin esa lista, A0 tendría que adivinar ids y periodos. No lleva
+precios ni pesos, porque A0 no debe citar una cifra que no venga de una
+herramienta. Se declara como información de apoyo, no como instrucción. E1
+es una caída de 10% en la emisora de la consulta y E2 una de 10% en todas
+las acciones de la cartera; los dos son supuestos.
+
+**D66. El comité propone compras; las ventas salen de reglas.** Nueva. El
+ejecutable solo admite `lado = compra` y POL1 prohíbe corto y
+apalancamiento. Por eso una venta no pasa por A4. La calcula una regla (D64
+y D67), queda con `origen = regla` y el ejecutor revisa la tenencia antes de
+aprobarla. La política del reto es POL1 con otro id (POL-RETO); su universo
+son las emisoras del caso, que siempre son del reto.
+
+**D67. De la respuesta del comité a la acción.** Nueva; reglas fijas.
+- Oportunidad:
+  - Si queda pendiente de revisión humana, se recomienda comprar la
+    cantidad propuesta.
+  - Excepción: si A1 leyó los titulares como negativos, la recomendación
+    es vigilar.
+  - Si queda bloqueada, «no operar», con los motivos del dictamen.
+  - Si el comité no llega a una propuesta, vigilar.
+- Noticias, precio o reporte de una posición:
+  - Hay deterioro si el sentimiento es negativo, o si en el reporte caen
+    ingresos y utilidad operativa.
+  - Deterioro con caída de 5% o más en 5 sesiones: vender 25% de la
+    posición.
+  - Deterioro sin esa caída: vigilar.
+  - Titulares mixtos o neutrales con caída: vigilar.
+  - En otro caso: mantener.
+- Una emisora fuera de la cartera solo se vigila.
+- Error controlado o sin respuesta: vigilar, con el motivo.
+- Una propuesta nueva sobre la misma emisora expira la anterior pendiente.
+
+**D68. Ejecución asistida, no automática.** Nueva; reemplaza el nivel (b)
+del plan.
+- El reto no tiene API y no encontré bases que permitan operar con un
+  programa, así que el ejecutor no entra a la cuenta.
+- Al aprobar repite las comprobaciones, porque entre T0 y la aprobación pudo
+  cambiar todo:
+  - el dictamen conforme de esa versión si viene del comité;
+  - una antigüedad de 2 días o menos;
+  - un precio dentro de ±3% del de la recomendación;
+  - el efectivo y la concentración en una compra;
+  - la tenencia en una venta.
+- Arma una boleta limitada de vigencia del día, con precio límite ±0.5% del
+  último.
+- Con el precio y el folio, la operación entra al libro y la recomendación
+  queda ejecutada.
+
+**D69. El recorrido sigue aunque falle una fuente y se detiene sin cuota.**
+Nueva.
+- Orden: precios → noticias y reportes de la cartera → vigía → reglas →
+  comité.
+- Una fuente que falla se anota y se sigue con el historial.
+- El comité analiza 4 situaciones por corrida, de las más severas y de la
+  cartera primero. Cada una usa de 4 a 13 llamadas y la cuota es de unas
+  500 diarias.
+- Si el modelo no responde (cuota o saturación, D55), las demás quedan
+  abiertas.
+- Las situaciones de más de 3 días se descartan y las recomendaciones de más
+  de 2 días expiran.
+
+**D70. Reportes de yfinance.** Nueva.
+- Se toma el último trimestre con ingresos y se compara contra el mismo
+  trimestre del año anterior.
+- Si yfinance no lo trae (pasa con WALMEX), se compara contra el trimestre
+  previo, y el periodo comparado lo dice.
+- Las cifras van en millones de la moneda del reporte.
+- El trimestre se nombra por el mes de cierre: el trimestre fiscal de NVDA
+  que cierra en julio es 2026Q3.
+- La fecha de publicación no viene en yfinance. Se estima en 30 días después
+  del cierre, nunca después de T0, y queda marcada como estimada.
+
+---
+
+## Bloque 8 · Estrategia validada, analistas más completos y monitor
+
+Este bloque responde a una pregunta: ¿la app ayuda a que el portafolio
+termine valiendo más? Tampoco toca el ejecutable.
+
+**D71. Las reglas de inversión se prueban con el historial del reto antes de
+usarse.** Nueva. La escribo antes de correr la comparación.
+- *Lo que ya vi.* Antes de escribir esta decisión corrí un backtest
+  exploratorio de ocho variantes sobre todo el periodo (enero de 2024 a octubre
+  de 2026). La regla de oportunidades de D64 perdió 14.3%, con una caída máxima
+  de −57.5%. Como ya vi resultados del periodo completo, separo entrenamiento y
+  prueba, y fijo aquí los candidatos y el criterio.
+- *Datos.* Cierres en pesos de las emisoras con datos, de
+  `data/precios_reto.csv.gz`. Las del SIC se convierten con el USDMXN del día.
+  Tienen tres sesgos que declaro:
+  - supervivencia, porque el universo es la lista de 2026;
+  - no incluyen dividendos, porque son cierres sin ajustar;
+  - el periodo cubre un solo régimen de mercado.
+- *Mecánica.*
+  - La señal usa cierres hasta la sesión anterior y se opera al cierre del
+    día.
+  - Cada lugar del portafolio vale 1/N. Si no hay emisoras suficientes que
+    pasen los filtros, la parte que sobra queda en efectivo.
+  - Cuesta 0.25% por lado sobre el monto operado. Es un supuesto: no encontré
+    la comisión del reto.
+  - Se permiten fracciones de título.
+- *Periodos.* Todas las estrategias empiezan en la primera sesión con 200
+  sesiones previas. El entrenamiento va de ahí al 30 de septiembre de 2025. La
+  prueba va del 1 de octubre de 2025 al último cierre.
+- *Candidatos.* Solo entran emisoras con precio de $10 o más, que no sean ETFs
+  apalancados o inversos y que tengan datos en toda la ventana.
+  - C0 `regla_actual`: la regla de D64 llevada a toda la cartera. Las 3
+    mejores por rendimiento de 20 sesiones con 5 sesiones positivas,
+    rebalanceando cada 20.
+  - C1 `momentum_120_top10`: las 10 mejores por rendimiento de 120 sesiones,
+    rebalanceando cada 60.
+  - C2 `momentum_120_top10_tendencia`: C1, pero solo con emisoras arriba de
+    su media de 200 sesiones y con rendimiento de 120 sesiones positivo.
+  - C3 `momentum_60_top10_tendencia`: las 10 mejores por 60 sesiones,
+    rebalanceando cada 20, con el filtro de tendencia.
+  - C4 `momentum_120_top15_tendencia`: C2 con 15 emisoras.
+- *Referencias, no candidatos.* Igual peso en todo el universo cada 60
+  sesiones, que serían unas 200 órdenes a mano, y los tres benchmarks del
+  reto.
+- *Criterio.* Gana el candidato con el mayor cociente entre rendimiento anual
+  y caída máxima en entrenamiento. En empate, el de menos órdenes. La prueba se
+  reporta como salga, aunque pierda contra el Agresivo.
+- *Lo que no demuestra.* Que funcione en adelante. El periodo de prueba es de
+  un año.
+
+**D72. La estrategia la elige el protocolo y la activas tú.** Nueva; retira
+la regla de oportunidades de D64.
+- *Primera corrida inválida.* Su base venía del Excel del reto, que no trae
+  USDMXN. Las 159 emisoras del SIC quedaron sin precio en pesos, así que el
+  backtest fue solo de la BMV y no usó los datos de D71. En esa corrida el
+  criterio eligió C3, que en prueba perdió 2.8%. No cuenta.
+- *Repetición.* La repetí con `data/precios_reto.csv.gz`, que sí trae
+  USDMXN, con los mismos candidatos y el mismo criterio. Ahora
+  `backtest.cargar` no corre sin tipo de cambio y una prueba lo verifica.
+- *Resultado.* Inicio común el 10 de octubre de 2024, entrenamiento al 30
+  de septiembre de 2025, prueba al 23 de octubre de 2026. Las cifras de
+  entrenamiento son anuales; las de prueba, del periodo.
+
+  | | Entrenamiento: anual | Caída máx. | Anual / caída | Prueba: rendimiento | Caída máx. |
+  |---|---|---|---|---|---|
+  | C0 regla actual | −31.6% | −59.0% | −0.54 | −16.5% | −42.4% |
+  | C1 = C2 | 32.5% | −40.3% | 0.81 | +75.5% | −22.1% |
+  | C3 | 15.8% | −29.6% | 0.54 | +11.8% | −30.7% |
+  | **C4** | 28.3% | −34.2% | **0.83** | **+49.2%** | −20.1% |
+  | Igual peso (referencia) | 14.7% | −17.0% | 0.86 | +13.3% | −6.3% |
+  | Agresivo (referencia) | 10.7% | −15.4% | 0.70 | +14.8% | −6.8% |
+
+  - El criterio elige C4. En la prueba ganó 49.2% contra 14.8% del
+    Agresivo, pero con una volatilidad de 36.9% contra 9.9% y una caída
+    máxima de −20.1% contra −6.8%.
+  - C1 y C2 salieron iguales: con 10 lugares, las de mayor momentum siempre
+    estuvieron arriba de su media de 200 y el filtro nunca actuó.
+  - La regla de D64 fue la peor en los dos periodos y la retiro.
+- *Por qué no se activa sola.*
+  - El riesgo es mucho mayor que el del Agresivo, y el resultado de prueba
+    depende de pocas emisoras que subieron mucho (MRNA subió 177% en un día
+    de agosto de 2026).
+  - Hay un solo año de prueba.
+  - El primer rebalanceo propone vender todo lo que no está en el objetivo.
+
+  La estrategia vigente se guarda en la base y la eliges en la página
+  Estrategia. Sin elección, el vigía no propone compras.
+- *Cómo lo aplica la app.* Igual que el backtest:
+  - la señal usa cierres hasta la sesión anterior;
+  - el ciclo dura `rebalanceo` sesiones;
+  - las órdenes se fijan al empezar el ciclo. Si se recalcularan en cada
+    vuelta, un movimiento normal de precio pediría ajustes que la
+    estrategia probada nunca hizo, y eso lo vi al revisar el plan.
+- *En qué se distingue del backtest.*
+  - Las ventas son de regla (D66) y las compras pasan por el comité.
+  - Una compra se propone solo cuando hay efectivo para la orden completa,
+    sin contar ventas que aún no registras.
+  - Con una posición arriba del límite no hay compras (D64).
+  - Los títulos son enteros y tú decides cada orden.
+- *Prioridad del comité.* Primero lo de severidad alta, luego las compras
+  de la estrategia y al final lo demás. Con 2 análisis por vuelta, las
+  noticias de emisoras que la estrategia está vendiendo se comían la cuota
+  antes de llegar a las compras.
+
+**D73. A2 recibe el reporte completo y una nota con indicadores.** Nueva. El
+ejecutable no cambia: cambian los datos que A2 lee.
+- *Partidas.* Además de ingresos y utilidades, el reporte trae:
+  - utilidad bruta y EBITDA;
+  - efectivo, deuda total y capital contable;
+  - flujo operativo, inversión en activo fijo y flujo libre.
+
+  `calcular_indicadores` sigue usando solo ingresos y utilidad operativa; el
+  resto A2 lo ve en `obtener_reporte`.
+- *La nota `indicadores_adicionales`.* Calculada por `comite/finanzas.py`,
+  cada cifra con su fórmula y su periodo:
+  - márgenes bruto y neto, con su cambio en puntos porcentuales;
+  - variación de la utilidad neta;
+  - flujo libre y flujo libre entre utilidad neta;
+  - deuda neta y deuda neta entre EBITDA de 4 trimestres;
+  - rendimiento sobre capital de 4 trimestres;
+  - valuación de Yahoo: precio entre utilidad, precio entre valor en libros
+    y dividendo de 12 meses.
+- *Por qué una nota.* El prompt de A2 le prohíbe calcular cifras, y
+  `consultar_nota` ya es su herramienta. Con `obtener_reporte`,
+  `calcular_indicadores` y la nota usa 3 de sus 4 herramientas.
+- *Cómo llega a A0.* El contexto de A0 dice que la nota existe, y las
+  solicitudes de reporte y de compra la piden.
+- *Datos que no cuadran.*
+  - Una variación mayor a 200% se marca como atípica, para corroborarla. La
+    utilidad neta de GFNORTEO de 2025Q2 en Yahoo da +2,420%.
+  - Los bancos no traen utilidad operativa ni EBITDA, y la nota lo dice.
+  - Los trimestres que solo tiene el balance no cuentan para comparar.
+  - El reporte se vuelve a leer, porque Yahoo completa partidas días
+    después.
+
+**D74. Monitor y calendario, no day trading.** Nueva; responde a la idea de
+tener escuchadores todo el tiempo. No hay day trading por cuatro razones:
+- Yahoo trae la BMV con unos 20 minutos de retraso;
+- Google News tarda de minutos a horas;
+- un caso del comité tarda de 30 a 150 s y la cuota es de unas 500 llamadas
+  al día;
+- el reto no tiene API.
+
+Lo que sí hace:
+- *Horario.* `python -m comite vigilar` corre cada 30 minutos, de lunes a
+  viernes de 7:30 a 15:00 de la Ciudad de México. Con `--una-vez` sirve
+  para el Programador de tareas.
+- *Cada vuelta.*
+  - Precios y titulares de la cartera.
+  - Reportes y calendario, cada 6 horas.
+  - El vigía, y 2 análisis del comité.
+  - Al llegar a 350 llamadas del día deja el comité, para que el chat
+    conserve las suyas.
+- *Calendario.* La fecha de reporte sale de `calendar` de yfinance. Tres
+  días antes se abre la situación `calendario`: es de regla, informativa y
+  dice la pérdida bajo E1. Cuando Yahoo publica el trimestre, la situación
+  `reporte` lo manda al comité.
+- *Avisos.* Una notificación de Windows cuando hay propuestas nuevas, y una
+  bitácora en `data/monitor.log`.
+- *Límite de tiempo.* Cada lectura de red tiene uno: 45 s, o 20 s para el
+  calendario. En una prueba, una llamada de yfinance se quedó colgada
+  varios minutos.
+
+**D75. Ficha de emisora y alertas informativas.** Nueva.
+- *La ficha.*
+  - Rendimientos de 1, 5, 20, 60 y 120 sesiones.
+  - Distancia a la media de 200.
+  - Volatilidad de 60 sesiones.
+  - Caída desde el máximo de 12 meses.
+  - Los indicadores del reporte y la fecha de reporte.
+- *Las alertas.*
+  - Del reporte: caen ingresos y utilidad operativa a la vez; flujo libre
+    negativo; deuda neta mayor a 3 veces el EBITDA; margen neto baja más de
+    2 puntos; pérdida en 4 trimestres.
+  - Del precio: abajo de su media de 200, o 20% o más abajo de su máximo.
+  - Del calendario: reporta pronto.
+- *Qué cambian.* Solo informan, con una excepción. Si el reporte muestra
+  ingresos y utilidad operativa a la baja (la señal de D67), una compra de
+  la estrategia queda en «vigilar». Esa excepción no está validada por el
+  backtest, porque no hay historia de reportes; es la misma regla que ya
+  aplicaba a las posiciones.
+
+**D76. A3 simula escenarios con la historia del reto.** Nueva; se suma a E1
+y E2 de D65. Las herramientas de A3 no cambian, pero `simular_escenarios`
+aplica los choques que le da el puente, y antes eran solo caídas planas de
+10%.
+- *Los nuevos.* Antes de ver cifras fijé tramos de 20 sesiones (un mes de
+  bolsa) dentro de las últimas 252 (un año):
+  - E3, el peor mes de tu cartera. Busca el tramo en que las acciones que
+    tienes hoy, con sus cantidades, más cayeron juntas. Cada emisora del caso
+    recibe lo que hizo en esas fechas, así que dice si la compra suma o resta
+    a la caída que ya tienes.
+  - E4, el peso fuerte. Toma la mayor caída del USDMXN en 20 sesiones. Las
+    emisoras del SIC caen eso en pesos, con su precio en dólares sin cambio.
+  - E5, el peor mes de la emisora de la consulta.
+
+  Si un escenario no tiene datos suficientes, no se arma.
+- *Cómo llegan.* A0 ve solo los títulos, sin fechas ni cifras (D65). A3 ve
+  las fechas y cifras en la descripción cuando simula. La solicitud de compra
+  pide simularlos todos en una sola llamada, porque A3 ya usa sus 4
+  herramientas: portafolio, precio, exposición y escenarios.
+- *Lo que ves.*
+  - Cada compra trae una tabla de estrés con la pérdida hoy y con la compra,
+    y su razón dice si la compra suma o resta en E3.
+  - La página Cartera muestra E2, E3 y E4 de lo que tienes.
+  - La cuenta usa la fórmula de `simular_escenarios` sin el modelo, y una
+    prueba verifica que coincide.
+- *Qué cambian.* Solo informan. No tengo un umbral validado para frenar una
+  compra por estrés, así que no lo invento.
+- *Con la cartera de prueba,* comprar 100 MRNA sumaría a la pérdida:
+  - $31,846 en E3 (MRNA cayó 7.6% en el peor mes de la cartera);
+  - $19,343 en E4;
+  - $139,552 en E5 (su peor mes fue −33%).
 
 ## Pendientes
 
